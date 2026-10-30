@@ -1,5 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
+import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC_CHANNELS } from '../shared/api'
@@ -13,6 +14,7 @@ import type {
 } from '../shared/api'
 import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
 import {
+  attachmentsDir,
   attachmentExists,
   listAttachments,
   mimeForAttachment,
@@ -22,6 +24,7 @@ import {
 } from './attachments'
 import { getDataDirInfo, migrateDataDir, resolveUserDataDir } from './data-location'
 import { EdgeDock } from './edge-dock'
+import { closeImageViewer, isImageViewerOpen, openImageViewer } from './image-viewer'
 import { applyLoginItem, readLoginItem, reconcileLoginItem } from './login-item'
 import { log } from './log'
 import { NotesStore } from './notes-store'
@@ -520,6 +523,58 @@ function registerIpc(): void {
     })
   })
 
+  ipcMain.handle(IPC_CHANNELS.attachmentsInfo, (event) => {
+    requireSender(event)
+    const dir = attachmentsDir(app.getPath('userData'))
+    const files = listAttachments(app.getPath('userData'))
+    return { dir, count: files.length, bytes: files.reduce((sum, file) => sum + file.bytes, 0) }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.openAttachmentsFolder, async (event) => {
+    requireSender(event)
+    const dir = attachmentsDir(app.getPath('userData'))
+    mkdirSync(dir, { recursive: true })
+    const failure = await shell.openPath(dir)
+    if (failure) {
+      throw new Error(`打开文件夹失败：${failure}`)
+    }
+    log('attachments-folder-opened', { dir })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.revealAttachment, (event, relative: unknown) => {
+    requireSender(event)
+    if (typeof relative !== 'string') {
+      throw new TypeError('attachment path must be a string')
+    }
+    const target = resolveAttachmentUrl(app.getPath('userData'), `edgenote-media://local/${relative}`)
+    if (!target) {
+      throw new TypeError('附件路径非法')
+    }
+    shell.showItemInFolder(target)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.openImageViewer, (event, relative: unknown) => {
+    requireSender(event)
+    if (typeof relative !== 'string') {
+      throw new TypeError('attachment path must be a string')
+    }
+    const target = resolveAttachmentUrl(app.getPath('userData'), `edgenote-media://local/${relative}`)
+    if (!target) {
+      throw new TypeError('附件路径非法')
+    }
+    return openImageViewer(`edgenote-media://local/${relative}`, path.basename(target))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.imageViewerOpen, (event) => {
+    requireSender(event)
+    return isImageViewerOpen()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.closeImageViewer, (event) => {
+    requireSender(event)
+    closeImageViewer()
+  })
+
   ipcMain.handle(IPC_CHANNELS.referencedAttachments, (event) => {
     requireSender(event)
     if (!notes) {
@@ -677,6 +732,7 @@ if (!gotSingleInstanceLock) {
 
   app.on('before-quit', () => {
     quitting = true
+    closeImageViewer()
     notes?.flushSync()
     store?.flush()
     dock?.dispose()

@@ -157,6 +157,12 @@ export const IPC_CHANNELS = {
   checkAttachments: 'edge-notes:check-attachments',
   listAttachments: 'edge-notes:list-attachments',
   trashAttachments: 'edge-notes:trash-attachments',
+  attachmentsInfo: 'edge-notes:attachments-info',
+  openAttachmentsFolder: 'edge-notes:open-attachments-folder',
+  revealAttachment: 'edge-notes:reveal-attachment',
+  openImageViewer: 'edge-notes:open-image-viewer',
+  imageViewerOpen: 'edge-notes:image-viewer-open',
+  closeImageViewer: 'edge-notes:close-image-viewer',
   noteGet: 'edge-notes:note-get',
   noteUpdate: 'edge-notes:note-update',
   noteSaveNow: 'edge-notes:note-save-now',
@@ -214,6 +220,16 @@ export interface EdgeNotesApi {
   listAttachments(): Promise<AttachmentFile[]>
   /** 把指定附件移入回收站（可还原） */
   trashAttachments(relatives: string[]): Promise<TrashResult>
+  /** 附件目录位置与占用（设置里展示"图片存在哪"） */
+  getAttachmentsInfo(): Promise<{ dir: string; count: number; bytes: number }>
+  /** 在资源管理器里打开附件目录 */
+  openAttachmentsFolder(): Promise<void>
+  /** 在资源管理器里选中某个附件 */
+  revealAttachment(relative: string): Promise<void>
+  /** 放大到独立窗口查看（不受面板宽度限制） */
+  openImageViewer(relative: string): Promise<boolean>
+  isImageViewerOpen(): Promise<boolean>
+  closeImageViewer(): Promise<void>
   /** 编辑器聚焦时抑制自动收起 */
   setEditorFocused(focused: boolean): void
 

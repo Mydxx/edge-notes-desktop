@@ -4,7 +4,7 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
-import { connectPage } from './lib/cdp.mjs'
+import { connectPage, connectTarget } from './lib/cdp.mjs'
 import { readLog, waitForEvent } from './lib/logfile.mjs'
 import {
   artifactsDir,
@@ -293,24 +293,72 @@ async function main() {
   await page.captureScreenshot(path.join(shotsDir, '06-image-preview.png'))
   ps('clipboard-restore', '-TextFile', clipboardBackup)
 
-  // 点击图片放大；Esc 关闭
-  const escKey = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
+  // 点击图片 → 独立窗口放大到屏幕（面板只有 350px，塞在面板里看不清）
+  const viewerFrom = readLog(logFile).length
   await page.evaluate(`document.querySelector('#note-preview img').click()`)
-  await waitFor(page, `document.querySelector('.lightbox') !== null`, 3000, '图片放大')
-  const lightboxInfo = await page.evaluate(`(() => {
-    const box = document.querySelector('.lightbox')
-    const img = box?.querySelector('img')
-    return { src: img?.getAttribute('src') ?? '', width: img?.naturalWidth ?? 0 }
-  })()`)
+  await delay(1500)
+  const viewerOpened = await page.evaluate('window.edgeNotes.isImageViewerOpen()')
+  const viewerLog = readLog(logFile)
+    .slice(viewerFrom)
+    .find((item) => item.event === 'image-viewer-opened')
   record(
-    '点击预览图片可放大查看',
-    String(lightboxInfo.src).startsWith('edgenote-media://') && lightboxInfo.width > 0,
-    JSON.stringify(lightboxInfo)
+    '点击预览图片打开独立的大图窗口',
+    viewerOpened === true && Boolean(viewerLog),
+    JSON.stringify(viewerLog ?? {})
   )
-  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', ...escKey })
-  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...escKey })
-  await waitFor(page, `document.querySelector('.lightbox') === null`, 3000, 'Esc 关闭放大图')
-  record('Esc 可关闭放大图', (await page.evaluate(`document.querySelector('.lightbox') === null`)) === true)
+  record(
+    '大图窗口尺寸按屏幕铺开（不是面板内缩放）',
+    Boolean(viewerLog) && viewerLog.width > 800 && viewerLog.height > 600,
+    viewerLog ? `${viewerLog.width}x${viewerLog.height}` : '未打开'
+  )
+
+  // 小图必须被放大到接近窗口尺寸，否则"放大到屏幕"名不副实
+  const targets = await fetch(`http://127.0.0.1:${cdpPort}/json/list`).then((response) => response.json())
+  const viewerTarget = targets.find((target) => typeof target.url === 'string' && target.url.startsWith('data:text/html'))
+  let viewerSize = null
+  if (viewerTarget) {
+    const viewerSession = await connectTarget(viewerTarget.webSocketDebuggerUrl)
+    viewerSize = await viewerSession.evaluate(`(() => {
+      const img = document.querySelector('img')
+      return img ? { natural: img.naturalWidth, shown: Math.round(img.clientWidth), viewport: Math.round(innerWidth) } : null
+    })()`)
+    viewerSession.close()
+  }
+  record(
+    '小图在大图窗口里被放大到窗口宽度',
+    Boolean(viewerSize) && viewerSize.shown > viewerSize.natural && viewerSize.shown >= viewerSize.viewport * 0.8,
+    JSON.stringify(viewerSize)
+  )
+  await page.evaluate('window.edgeNotes.closeImageViewer()')
+  await delay(500)
+  record('大图窗口可关闭', (await page.evaluate('window.edgeNotes.isImageViewerOpen()')) === false)
+
+  // 图片位置可查、可在资源管理器里打开
+  const attachInfo = await page.evaluate('window.edgeNotes.getAttachmentsInfo()')
+  record(
+    '能读到附件目录位置与占用',
+    String(attachInfo.dir).toLowerCase().includes('attachments') && attachInfo.count >= 1 && attachInfo.bytes > 0,
+    JSON.stringify(attachInfo)
+  )
+  await page.evaluate(`document.getElementById('open-settings').click()`)
+  await waitFor(page, `document.getElementById('attachments-path') !== null`, 3000, '设置里显示附件目录')
+  const pathText = await page.evaluate(`document.getElementById('attachments-path')?.textContent ?? ''`)
+  record(
+    '设置面板显示附件目录路径与数量',
+    pathText.includes('attachments') && /\d+ 张/.test(pathText),
+    pathText.trim().slice(0, 70)
+  )
+  await page.evaluate(`document.getElementById('open-settings').click()`)
+  await delay(200)
+
+  // 图片窗口同样只认附件目录下的单层文件
+  let badViewerError = null
+  try {
+    await page.evaluate(`window.edgeNotes.openImageViewer('../../edge-notes-note.md')`)
+  } catch (error) {
+    badViewerError = error instanceof Error ? error.message : String(error)
+  }
+  record('大图窗口拒绝目录穿越路径', badViewerError !== null && /非法/.test(badViewerError), String(badViewerError).slice(0, 50))
 
   // 自定义协议只允许附件目录下的单层文件，任何 ../ 必须被拒绝
   const traversalFrom = readLog(logFile).length

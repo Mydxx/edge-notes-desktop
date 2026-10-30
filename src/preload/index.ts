@@ -74,6 +74,15 @@ const api: EdgeNotesApi = {
   listAttachments: () => ipcRenderer.invoke(IPC_CHANNELS.listAttachments) as Promise<AttachmentFile[]>,
   trashAttachments: (relatives: string[]) =>
     ipcRenderer.invoke(IPC_CHANNELS.trashAttachments, relatives) as Promise<TrashResult>,
+  getAttachmentsInfo: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.attachmentsInfo) as Promise<{ dir: string; count: number; bytes: number }>,
+  openAttachmentsFolder: () => ipcRenderer.invoke(IPC_CHANNELS.openAttachmentsFolder) as Promise<void>,
+  revealAttachment: (relative: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.revealAttachment, relative) as Promise<void>,
+  openImageViewer: (relative: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.openImageViewer, relative) as Promise<boolean>,
+  isImageViewerOpen: () => ipcRenderer.invoke(IPC_CHANNELS.imageViewerOpen) as Promise<boolean>,
+  closeImageViewer: () => ipcRenderer.invoke(IPC_CHANNELS.closeImageViewer) as Promise<void>,
   setEditorFocused: (focused: boolean) => {
     ipcRenderer.send(IPC_CHANNELS.editorFocus, focused)
   },

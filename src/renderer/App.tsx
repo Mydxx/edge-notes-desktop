@@ -110,7 +110,7 @@ export default function App() {
   const [previewHtml, setPreviewHtml] = useState('')
   const [contentVersion, setContentVersion] = useState(0)
   const [attachError, setAttachError] = useState<string | null>(null)
-  const [zoomed, setZoomed] = useState<string | null>(null)
+  const [attachmentsInfo, setAttachmentsInfo] = useState<{ dir: string; count: number; bytes: number } | null>(null)
   const [prune, setPrune] = useState<{ count: number; bytes: number; relatives: string[] } | null>(null)
   const [notes, setNotes] = useState<NotesIndexState | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -274,6 +274,14 @@ export default function App() {
         }
       })
       .catch(() => undefined)
+    window.edgeNotes
+      .getAttachmentsInfo()
+      .then((info) => {
+        if (alive) {
+          setAttachmentsInfo(info)
+        }
+      })
+      .catch(() => undefined)
     return () => {
       alive = false
     }
@@ -427,9 +435,10 @@ export default function App() {
         gone.className = 'preview__blocked'
         gone.textContent = `［图片缺失：${src.split('/').pop()}］`
         img.replaceWith(gone)
-      } else if (src.startsWith('attachments/')) {
+      } else       if (src.startsWith('attachments/')) {
         // 不用 loading="lazy"：便签里图片数量很少，懒加载反而会让刚切到预览时图片空白
         img.setAttribute('src', `edgenote-media://local/${src}`)
+        img.setAttribute('title', '点击放大到屏幕（Esc 关闭）')
       } else {
         // 外链图片不加载（应用不联网），也不用留一个破图标，换成可读的说明
         const blocked = document.createElement('span')
@@ -750,7 +759,7 @@ export default function App() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
-        setZoomed(null)
+        setSettingsOpen(false)
         return
       }
       const mod = event.ctrlKey || event.metaKey
@@ -1199,16 +1208,36 @@ export default function App() {
           ) : null}
           <div className="settings__row">
             <span className="settings__label">图片附件</span>
-            <button
-              id="prune-attachments"
-              type="button"
-              className="switchBtn"
-              title="把正文里没有引用的图片移入回收站"
-              onClick={() => void handleScanAttachments()}
-            >
-              清理…
-            </button>
+            <span className="settings__actions">
+              <button
+                id="open-attachments"
+                type="button"
+                className="switchBtn"
+                title="在资源管理器里打开图片所在文件夹"
+                onClick={() => {
+                  void window.edgeNotes
+                    .openAttachmentsFolder()
+                    .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
+                }}
+              >
+                打开
+              </button>
+              <button
+                id="prune-attachments"
+                type="button"
+                className="switchBtn"
+                title="把正文里没有引用的图片移入回收站"
+                onClick={() => void handleScanAttachments()}
+              >
+                清理…
+              </button>
+            </span>
           </div>
+          {attachmentsInfo ? (
+            <p className="settings__path" id="attachments-path" title={attachmentsInfo.dir}>
+              {attachmentsInfo.dir}（{attachmentsInfo.count} 张 · {formatBytes(attachmentsInfo.bytes)}）
+            </p>
+          ) : null}
           {notice ? <p className="settings__hint">{notice}</p> : null}
 
           <p className="settings__hint">拖动面板内侧边缘可调整宽度；Esc 关闭本面板。</p>
@@ -1300,21 +1329,21 @@ export default function App() {
           ref={previewRef}
           onClick={(event) => {
             const target = event.target as HTMLElement
-            if (target.tagName === 'IMG') {
-              const src = target.getAttribute('src')
-              if (src && src.startsWith('edgenote-media://')) {
-                setZoomed(src)
-              }
+            if (target.tagName !== 'IMG') {
+              return
             }
+            const src = target.getAttribute('src') ?? ''
+            const relative = src.replace('edgenote-media://local/', '')
+            if (!relative.startsWith('attachments/')) {
+              return
+            }
+            // 面板只有 350px，看图必须开独立窗口放到屏幕上
+            void window.edgeNotes
+              .openImageViewer(relative)
+              .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
           }}
           dangerouslySetInnerHTML={{ __html: previewHtml }}
         />
-      ) : null}
-
-      {zoomed ? (
-        <div className="lightbox" role="dialog" aria-label="图片预览" onClick={() => setZoomed(null)} title="点击任意处或按 Esc 关闭">
-          <img src={zoomed} alt="" />
-        </div>
       ) : null}
 
       {attachError ? <div className="errorBar">图片插入失败：{attachError}</div> : null}

@@ -24,6 +24,11 @@ export async function connectPage(port, timeoutMs = 20000) {
   throw new Error(`无法连接 CDP (port ${port}): ${lastError ? lastError.message : 'no page target'}`)
 }
 
+/** 直接连到指定 target（多窗口场景：主面板 + 图片窗口） */
+export async function connectTarget(wsUrl) {
+  return openSession(wsUrl)
+}
+
 async function openSession(wsUrl) {
   const socket = new WebSocket(wsUrl)
   await new Promise((resolve, reject) => {
