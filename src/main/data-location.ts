@@ -1,5 +1,5 @@
 import { app } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { log } from './log'
 
@@ -7,7 +7,36 @@ const SETTINGS_FILE = 'edge-notes-settings.json'
 const NOTE_FILE = 'edge-notes-note.md'
 /** 纯文本时代的历史文件名，迁移时一起带走，避免升级用户的笔记留在旧目录 */
 const LEGACY_NOTE_FILE = 'edge-notes-note.txt'
+/** 图片附件目录：笔记里写的是 attachments/xxx.png 相对路径，搬家时必须整目录带走 */
+const ATTACHMENT_DIR = 'attachments'
 const POINTER_FILE = 'data-location.json'
+
+/**
+ * 复制附件目录（只处理一层，与附件协议的白名单保持一致）。
+ * 返回复制的文件数，便于校验"是不是真的搬过去了"。
+ */
+function copyAttachments(from: string, to: string): number {
+  const source = path.join(from, ATTACHMENT_DIR)
+  if (!existsSync(source)) {
+    return 0
+  }
+  const target = path.join(to, ATTACHMENT_DIR)
+  mkdirSync(target, { recursive: true })
+  let copied = 0
+  for (const entry of readdirSync(source, { withFileTypes: true })) {
+    if (!entry.isFile()) {
+      continue
+    }
+    const src = path.join(source, entry.name)
+    const dest = path.join(target, entry.name)
+    copyFileSync(src, dest)
+    if (statSync(src).size !== statSync(dest).size) {
+      throw new Error(`附件迁移校验失败：${entry.name}`)
+    }
+    copied += 1
+  }
+  return copied
+}
 
 /**
  * 数据目录指针文件放在**默认** userData 里，而不是当前数据目录里：
@@ -86,13 +115,15 @@ export function resolveUserDataDir(): void {
     // 之前的数据可能已经在系统默认目录里：先搬过去，别让人以为笔记丢了
     const previous = app.getPath('userData')
     let migrated = 0
-    for (const name of [SETTINGS_FILE, NOTE_FILE]) {
+    for (const name of [SETTINGS_FILE, NOTE_FILE, LEGACY_NOTE_FILE]) {
       const src = path.join(previous, name)
       if (existsSync(src) && !existsSync(path.join(dir, name))) {
         copyFileSync(src, path.join(dir, name))
         migrated += 1
       }
     }
+    // 图片必须跟着笔记一起搬，否则正文里的 attachments/… 会全部失效
+    migrated += copyAttachments(previous, dir)
     mkdirSync(path.dirname(pointerPath()), { recursive: true })
     writeFileSync(pointerPath(), `${JSON.stringify({ dataDir: dir }, null, 2)}\n`, 'utf8')
     app.setPath('userData', dir)
@@ -169,8 +200,10 @@ export function migrateDataDir(target: string): MigrationResult {
     copied.push(name)
   }
 
+  const attachmentCount = copyAttachments(from, to)
+
   mkdirSync(path.dirname(pointerPath()), { recursive: true })
   writeFileSync(pointerPath(), `${JSON.stringify({ dataDir: to }, null, 2)}\n`, 'utf8')
-  log('data-dir-migrated', { from, to, copied })
+  log('data-dir-migrated', { from, to, copied, attachments: attachmentCount })
   return { from, to, copied, requiresRestart: true }
 }

@@ -29,7 +29,9 @@ export function readLoginItem(): LoginItemState {
 
 /** 写入后立刻回读校验；系统没接受就抛错，绝不返回"假的成功" */
 export function applyLoginItem(enabled: boolean): LoginItemState {
-  app.setLoginItemSettings({ openAtLogin: enabled, path: process.execPath, args: launchArgs() })
+  // Windows 上还要带 enabled：它同时改写 StartupApproved 的启用位，
+  // 用户在"启动应用"里手动关过时，只写 Run 项会被系统判为未启用。
+  app.setLoginItemSettings({ openAtLogin: enabled, enabled, path: process.execPath, args: launchArgs() })
   const after = readLoginItem()
   log('login-item-applied', { requested: enabled, readback: after.enabled })
   if (after.enabled !== enabled) {

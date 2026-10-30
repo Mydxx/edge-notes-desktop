@@ -316,6 +316,42 @@ async function main() {
   await page.evaluate(`document.getElementById('toggle-preview').click()`)
   await delay(200)
 
+  // Ctrl+E 双向切换；视图模式要持久化到设置里
+  await page.evaluate(`window.edgeNotes.setViewMode('edit')`)
+  await waitFor(page, `document.getElementById('note-preview') === null`, 3000, '先回到编辑态')
+  const ctrlE = { key: 'e', code: 'KeyE', windowsVirtualKeyCode: 69, nativeVirtualKeyCode: 69, modifiers: 2 }
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', ...ctrlE })
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...ctrlE })
+  await waitFor(page, `document.getElementById('note-preview') !== null`, 3000, 'Ctrl+E 进入预览')
+  const modePreview = (await page.evaluate('window.edgeNotes.getState()')).settings.viewMode
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', ...ctrlE })
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...ctrlE })
+  await waitFor(page, `document.getElementById('note-preview') === null`, 3000, 'Ctrl+E 回到编辑')
+  const modeAfter = (await page.evaluate('window.edgeNotes.getState()')).settings.viewMode
+  record(
+    'Ctrl+E 在编辑/预览间双向切换并写入设置',
+    modePreview === 'preview' && modeAfter === 'edit',
+    `${modePreview} → ${modeAfter}`
+  )
+
+  // 附件被删掉后，预览要给出可读提示而不是破图标
+  if (attachmentPath) {
+    rmSync(attachmentPath, { force: true })
+  }
+  await page.evaluate(`window.edgeNotes.setViewMode('preview')`)
+  await waitFor(
+    page,
+    `[...document.querySelectorAll('#note-preview .preview__blocked')].some((el) => el.textContent.includes('图片缺失'))`,
+    6000,
+    '缺图提示'
+  )
+  const missingText = await page.evaluate(
+    `[...document.querySelectorAll('#note-preview .preview__blocked')].map((el) => el.textContent).join('|')`
+  )
+  record('附件丢失时预览提示「图片缺失」', missingText.includes('图片缺失'), missingText.slice(0, 48))
+  await page.evaluate(`window.edgeNotes.setViewMode('edit')`)
+  await delay(200)
+
   // ------------------------------------------------------------ 清空 + 取消
   await openPanel(page, metrics)
   const contentBeforeClear = await editorValue(page)

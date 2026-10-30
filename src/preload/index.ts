@@ -24,6 +24,7 @@ const api: EdgeNotesApi = {
   setHidden: (hidden: boolean) => ipcRenderer.invoke(IPC_CHANNELS.setHidden, hidden) as Promise<EdgeNotesState>,
   setTheme: (theme) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, theme) as Promise<EdgeNotesState>,
   setFontSize: (scale) => ipcRenderer.invoke(IPC_CHANNELS.setFontSize, scale) as Promise<EdgeNotesState>,
+  setViewMode: (mode) => ipcRenderer.invoke(IPC_CHANNELS.setViewMode, mode) as Promise<EdgeNotesState>,
   getLoginItemState: () => ipcRenderer.invoke(IPC_CHANNELS.getLoginItem) as Promise<LoginItemState>,
   setLaunchAtLogin: (enabled: boolean) =>
     ipcRenderer.invoke(IPC_CHANNELS.setLaunchAtLogin, enabled) as Promise<EdgeNotesState>,
@@ -41,6 +42,7 @@ const api: EdgeNotesApi = {
   retrySave: () => ipcRenderer.invoke(IPC_CHANNELS.noteRetry) as Promise<NoteStatus>,
   saveAttachment: (bytes: Uint8Array, mime: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.saveAttachment, bytes, mime) as Promise<{ relative: string; bytes: number }>,
+  checkAttachments: (paths: string[]) => ipcRenderer.invoke(IPC_CHANNELS.checkAttachments, paths) as Promise<string[]>,
   setEditorFocused: (focused: boolean) => {
     ipcRenderer.send(IPC_CHANNELS.editorFocus, focused)
   },

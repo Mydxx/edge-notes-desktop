@@ -5,7 +5,7 @@ import path from 'node:path'
 import { IPC_CHANNELS } from '../shared/api'
 import type { DockPhase, DockSide, EdgeNotesSettings, EdgeNotesState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
-import { mimeForAttachment, resolveAttachmentUrl, saveAttachment } from './attachments'
+import { attachmentExists, mimeForAttachment, resolveAttachmentUrl, saveAttachment } from './attachments'
 import { getDataDirInfo, migrateDataDir, resolveUserDataDir } from './data-location'
 import { EdgeDock } from './edge-dock'
 import { applyLoginItem, readLoginItem, reconcileLoginItem } from './login-item'
@@ -50,7 +50,8 @@ function buildState(): EdgeNotesState {
     collapseDelay: COLLAPSE_DELAY_DEFAULT,
     launchAtLogin: false,
     theme: 'light',
-    fontSize: 'normal'
+    fontSize: 'normal',
+    viewMode: 'edit'
   }
   const phase = currentPhase()
   return {
@@ -122,7 +123,7 @@ function createWindow(): BrowserWindow {
     height: 640,
     show: false,
     frame: false,
-    backgroundColor: dark ? '#12151c' : '#f7f8fa',
+    backgroundColor: dark ? '#12151c' : '#f7f3ec',
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -223,7 +224,7 @@ function applySettings(patch: Partial<EdgeNotesSettings>): EdgeNotesState {
   // 主题变化时同步原生窗口底色，避免拖动/重绘时露出旧主题的底色
   if (mainWindow && !mainWindow.isDestroyed()) {
     const dark = next.theme === 'dark' || (next.theme === 'system' && nativeTheme.shouldUseDarkColors)
-    mainWindow.setBackgroundColor(dark ? '#12151c' : '#f7f8fa')
+    mainWindow.setBackgroundColor(dark ? '#12151c' : '#f7f3ec')
   }
   const state = buildState()
   broadcast()
@@ -307,6 +308,14 @@ function registerIpc(): void {
       throw new TypeError('fontSize must be small / normal / large')
     }
     return applySettings({ fontSize: value })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.setViewMode, (event, value: unknown) => {
+    requireSender(event)
+    if (value !== 'edit' && value !== 'preview') {
+      throw new TypeError('viewMode must be edit / preview')
+    }
+    return applySettings({ viewMode: value })
   })
 
   ipcMain.handle(IPC_CHANNELS.getDataDir, (event) => {
@@ -408,6 +417,15 @@ function registerIpc(): void {
       throw new TypeError('attachment mime must be a string')
     }
     return saveAttachment(app.getPath('userData'), bytes, mime)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.checkAttachments, (event, paths: unknown) => {
+    requireSender(event)
+    if (!Array.isArray(paths)) {
+      throw new TypeError('attachment paths must be an array')
+    }
+    const dir = app.getPath('userData')
+    return paths.filter((item): item is string => typeof item === 'string' && !attachmentExists(dir, item))
   })
 
   ipcMain.on(IPC_CHANNELS.editorFocus, (event, value: unknown) => {

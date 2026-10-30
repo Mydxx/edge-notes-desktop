@@ -3,32 +3,33 @@
    所有组件只引用变量，避免散落的硬编码数值。
    ============================================================= */
 :root {
-  /* 颜色：默认浅色（用户偏好），深色见下方 [data-theme='dark'] */
-  --color-bg: #f6f7f9;
-  --color-bg-raised: #ffffff;
-  --color-bg-sunken: #eceef2;
-  --color-border: #e2e5eb;
-  --color-border-strong: #cfd5df;
-  --color-text: #1c2230;
-  --color-text-dim: #5a6478;
-  --color-text-muted: #8b93a3;
-  --color-accent: #2f6fed;
-  --color-accent-soft: rgba(47, 111, 237, 0.1);
-  --color-accent-soft-strong: rgba(47, 111, 237, 0.18);
-  --color-strip: rgba(47, 111, 237, 0.5);
-  --color-danger: #c0392b;
-  --color-danger-text: #a8332a;
-  --color-danger-bg: #fdeceb;
-  --color-danger-strong: #f5d3d0;
-  --color-danger-hover: #efc4c0;
-  --color-danger-quiet: rgba(192, 57, 43, 0.09);
-  --color-warn: #8a6a12;
-  --color-hover: rgba(28, 34, 48, 0.06);
-  --color-btn-hover: #d9dee8;
-  --color-placeholder: #a3aab8;
-  --color-scroll-thumb: #ccd2dd;
-  --color-scroll-thumb-hover: #b6becd;
-  --shadow-popover: 0 10px 26px rgba(28, 34, 48, 0.16);
+  /* 颜色：默认浅色。暖米白纸感 + 低饱和墨蓝强调色，
+     不做"把黑色改成白色"的网页白（纯白 #fff 会显得生硬、对比过强）。 */
+  --color-bg: #f7f3ec;
+  --color-bg-raised: #fdfaf5;
+  --color-bg-sunken: #ece5d8;
+  --color-border: #e4dccd;
+  --color-border-strong: #d2c7b4;
+  --color-text: #2b2721;
+  --color-text-dim: #6b6153;
+  --color-text-muted: #8b8272;
+  --color-accent: #526d8a;
+  --color-accent-soft: rgba(82, 109, 138, 0.1);
+  --color-accent-soft-strong: rgba(82, 109, 138, 0.2);
+  --color-strip: rgba(82, 109, 138, 0.45);
+  --color-danger: #a8483c;
+  --color-danger-text: #983d31;
+  --color-danger-bg: #f8e9e4;
+  --color-danger-strong: #f0d6cf;
+  --color-danger-hover: #e8c2ba;
+  --color-danger-quiet: rgba(168, 72, 60, 0.08);
+  --color-warn: #8a6a2a;
+  --color-hover: rgba(43, 39, 33, 0.055);
+  --color-btn-hover: #e0d7c7;
+  --color-placeholder: #b3a996;
+  --color-scroll-thumb: #d9cfbe;
+  --color-scroll-thumb-hover: #c8bba6;
+  --shadow-popover: 0 10px 26px rgba(60, 50, 35, 0.14);
   color-scheme: light;
 
   /* 字体：优先 Win11 现代 UI 字体，CJK 用雅黑 UI，缺失时回落系统字体 */

@@ -200,6 +200,11 @@ async function main() {
       await page2.insertText('迁移前的内容')
       await delay(900)
 
+      // 造一个附件，验证改数据目录时图片会一起搬走
+      const sourceAttachments = path.join(userDataDir, 'attachments')
+      mkdirSync(sourceAttachments, { recursive: true })
+      writeFileSync(path.join(sourceAttachments, 'probe.png'), Buffer.from('89504e470d0a1a0a', 'hex'))
+
       const migrated = await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(migrateTarget)})`)
       const noteInTarget = path.join(migrateTarget, 'edge-notes-note.md')
       const settingsInTarget = path.join(migrateTarget, 'edge-notes-settings.json')
@@ -207,6 +212,12 @@ async function main() {
         '迁移后新目录里数据齐全',
         existsSync(noteInTarget) && existsSync(settingsInTarget) && readFileSync(noteInTarget, 'utf8').includes('迁移前的内容'),
         JSON.stringify(migrated.copied)
+      )
+      const migratedAttachment = path.join(migrateTarget, 'attachments', 'probe.png')
+      record(
+        '迁移会连同 attachments 一起搬走（图片链接不会失效）',
+        existsSync(migratedAttachment) && readFileSync(migratedAttachment).length === 8,
+        migratedAttachment
       )
       const pointerRaw = existsSync(pointerFile) ? JSON.parse(readFileSync(pointerFile, 'utf8')) : null
       record('迁移后写入指针文件（指向新目录）', pointerRaw?.dataDir === migrateTarget, JSON.stringify(pointerRaw))

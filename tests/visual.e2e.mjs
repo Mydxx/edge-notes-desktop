@@ -107,6 +107,24 @@ async function main() {
     record('默认宽度：编辑区占据主要空间', emptyLayout.editorH / emptyLayout.viewportH > 0.85, `${Math.round((emptyLayout.editorH / emptyLayout.viewportH) * 100)}%`)
     record('默认宽度：无横向溢出', emptyLayout.overflowX === 0 && emptyLayout.barOverflow <= 0 && emptyLayout.footOverflow <= 0, JSON.stringify(emptyLayout))
 
+    // 浅色主题的"质感"要能被量化：不是纯白底，且正文对比度达标
+    const themeCheck = await page.evaluate(`(() => {
+      const parse = (c) => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number)
+      const lum = (rgb) => {
+        const f = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4) })
+        return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2]
+      }
+      const ratio = (a, b) => { const x = [lum(a), lum(b)].sort((m, n) => n - m); return (x[0] + 0.05) / (x[1] + 0.05) }
+      const body = getComputedStyle(document.body)
+      const bg = parse(body.backgroundColor)
+      const text = parse(getComputedStyle(document.getElementById('note-editor')).color)
+      const dim = parse(getComputedStyle(document.querySelector('.foot__status')).color)
+      return { bg: body.backgroundColor, text: Number(ratio(text, bg).toFixed(2)), dim: Number(ratio(dim, bg).toFixed(2)) }
+    })()`)
+    record('浅色主题不是纯白底（暖米白）', themeCheck.bg !== 'rgb(255, 255, 255)', themeCheck.bg)
+    record('正文对比度 ≥ 4.5', themeCheck.text >= 4.5, `ratio=${themeCheck.text}`)
+    record('次要文字对比度 ≥ 3', themeCheck.dim >= 3, `ratio=${themeCheck.dim}`)
+
     // 2. 长文本 @ 默认宽度
     await page.evaluate(`document.getElementById('note-editor').focus()`)
     await page.insertText(LONG_TEXT)

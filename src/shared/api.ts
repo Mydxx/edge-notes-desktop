@@ -13,6 +13,9 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 /** 正文字号档位 */
 export type FontScale = 'small' | 'normal' | 'large'
 
+/** 视图模式：编辑源码 / 阅读预览 */
+export type ViewMode = 'edit' | 'preview'
+
 export interface EdgeNotesSettings {
   /** 停靠边：右侧（默认）/ 左侧 */
   side: DockSide
@@ -30,6 +33,8 @@ export interface EdgeNotesSettings {
   theme: ThemeMode
   /** 正文字号档位 */
   fontSize: FontScale
+  /** 上次使用的视图模式，重启后沿用 */
+  viewMode: ViewMode
 }
 
 /** 数据目录信息（目录本身不在 settings.json 里，避免自指） */
@@ -97,6 +102,7 @@ export const IPC_CHANNELS = {
   setHidden: 'edge-notes:set-hidden',
   setTheme: 'edge-notes:set-theme',
   setFontSize: 'edge-notes:set-font-size',
+  setViewMode: 'edge-notes:set-view-mode',
   getLoginItem: 'edge-notes:get-login-item',
   setLaunchAtLogin: 'edge-notes:set-launch-at-login',
   getDataDir: 'edge-notes:get-data-dir',
@@ -107,6 +113,7 @@ export const IPC_CHANNELS = {
   stateChanged: 'edge-notes:state-changed',
   openSettings: 'edge-notes:open-settings',
   saveAttachment: 'edge-notes:save-attachment',
+  checkAttachments: 'edge-notes:check-attachments',
   noteGet: 'edge-notes:note-get',
   noteUpdate: 'edge-notes:note-update',
   noteSaveNow: 'edge-notes:note-save-now',
@@ -128,6 +135,7 @@ export interface EdgeNotesApi {
   setHidden(hidden: boolean): Promise<EdgeNotesState>
   setTheme(theme: ThemeMode): Promise<EdgeNotesState>
   setFontSize(scale: FontScale): Promise<EdgeNotesState>
+  setViewMode(mode: ViewMode): Promise<EdgeNotesState>
   getLoginItemState(): Promise<LoginItemState>
   setLaunchAtLogin(enabled: boolean): Promise<EdgeNotesState>
   getDataDir(): Promise<DataDirInfo>
@@ -147,6 +155,8 @@ export interface EdgeNotesApi {
   retrySave(): Promise<NoteStatus>
   /** 把剪贴板里的图片写入附件目录，返回可嵌入 Markdown 的相对路径 */
   saveAttachment(bytes: Uint8Array, mime: string): Promise<{ relative: string; bytes: number }>
+  /** 返回其中已经不存在的附件路径（用于预览时提示"图片缺失"） */
+  checkAttachments(paths: string[]): Promise<string[]>
   /** 编辑器聚焦时抑制自动收起 */
   setEditorFocused(focused: boolean): void
 

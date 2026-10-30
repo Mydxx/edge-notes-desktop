@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { log } from './log'
 
@@ -73,6 +73,12 @@ export function resolveAttachmentUrl(userDataDir: string, requestUrl: string): s
     return null
   }
   return path.join(attachmentsDir(userDataDir), name)
+}
+
+/** 判断 Markdown 里的相对路径在附件目录中是否真的存在 */
+export function attachmentExists(userDataDir: string, relative: string): boolean {
+  const target = resolveAttachmentUrl(userDataDir, `edgenote-media://local/${relative}`)
+  return target !== null && existsSync(target)
 }
 
 export function mimeForAttachment(filePath: string): string {

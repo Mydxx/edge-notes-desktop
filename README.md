@@ -75,10 +75,14 @@ tests/lib/                 CDP 客户端、日志读取、PowerShell 驱动脚�
   attachments\                粘贴进来的图片（png/jpg/gif/webp，单张 ≤ 10 MB）
 ```
 
-笔记是 **Markdown**：头栏的眼睛图标在「编辑源码 / 预览」之间切换。直接 `Ctrl+V` 粘贴截图会把图片落到 `attachments\`，并在光标处插入 `![](attachments/xxx.png)`；预览用自定义协议 `edgenote-media://local/attachments/<file>` 读取，**只允许附件目录下的单层文件**（`../` 一律拒绝）。外链图片不加载（应用不联网），HTML 经 DOMPurify 净化（`<script>`/`onerror` 会被剔除）。
+主题：浅色为**暖米白纸感**（底色 `#f7f3ec`，不纯白）＋低饱和墨蓝强调色，深色沿用暗色方案；字号三档。
+实测对比度：正文 13.4:1、次要文字 3.4:1（测试里有断言，见 `test:visual`）。
+
+笔记是 **Markdown**：头栏的眼睛图标（或 **Ctrl+E**）在「编辑源码 / 预览」之间切换，模式会记进设置、重启沿用。直接 `Ctrl+V` 粘贴截图会把图片落到 `attachments\`，并在光标处插入 `![](attachments/xxx.png)`；预览用自定义协议 `edgenote-media://local/attachments/<file>` 读取，**只允许附件目录下的单层文件**（`../` 一律拒绝）。外链图片不加载（应用不联网），HTML 经 DOMPurify 净化（`<script>`/`onerror` 会被剔除）。
 
 - 目录位置记录在指针文件 `%APPDATA%\Edge Notes Desktop\data-location.json` 里（**始终在默认位置**，否则改了目录下次就找不到数据）。
-- 设置面板「数据目录 → 更改…」可以迁移到任意目录：复制 → 逐文件校验 → 写指针 → 自动重启；目标目录已有数据时**直接拒绝**，不覆盖。
+- 设置面板「数据目录 → 更改…」可以迁移到任意目录：复制（**笔记 + `attachments` 整目录**）→ 逐文件校验 → 写指针 → 自动重启；目标目录已有数据时**直接拒绝**，不覆盖。
+- 图片全部是本地资源：笔记里写相对路径 `attachments/xxx.png`，附件跟着数据目录走，换盘/搬家不会出现失效链接；附件被删时预览显示「图片缺失：xxx」而不是破图标。
 - 测试运行时用 `--user-data-dir` 指向 `tests/artifacts/`，不会碰到真实数据。
 
 ## 安全边界

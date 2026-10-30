@@ -17,7 +17,8 @@ export const DEFAULT_SETTINGS: EdgeNotesSettings = {
   collapseDelay: COLLAPSE_DELAY_DEFAULT,
   launchAtLogin: false,
   theme: 'light',
-  fontSize: 'normal'
+  fontSize: 'normal',
+  viewMode: 'edit'
 }
 
 /**
@@ -116,6 +117,7 @@ export function sanitizeSettings(input: Record<string, unknown>): EdgeNotesSetti
     collapseDelay,
     theme,
     fontSize,
+    viewMode: input.viewMode === 'preview' ? 'preview' : 'edit',
     alwaysOnTop: input.alwaysOnTop !== false,
     pinnedOpen: input.pinnedOpen === true,
     launchAtLogin: input.launchAtLogin === true

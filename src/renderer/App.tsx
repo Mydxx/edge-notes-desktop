@@ -78,9 +78,10 @@ export default function App() {
   const [loginItem, setLoginItem] = useState<LoginItemState | null>(null)
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
-  const [preview, setPreview] = useState(false)
   const [previewHtml, setPreviewHtml] = useState('')
+  const [contentVersion, setContentVersion] = useState(0)
   const [attachError, setAttachError] = useState<string | null>(null)
+  const previewRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
   const loadedRef = useRef(false)
   /** 拖动调宽时的锚点（面板贴边那一侧的屏幕坐标） */
@@ -132,6 +133,7 @@ export default function App() {
         if (editor && editor.value !== snapshot.content) {
           editor.value = snapshot.content
         }
+        setContentVersion((version) => version + 1)
         setStatus(snapshot.status)
       })
       .catch((reason: unknown) => {
@@ -310,6 +312,7 @@ export default function App() {
       editor.value = ''
       editor.focus()
     }
+    setContentVersion((version) => version + 1)
     try {
       setStatus(await window.edgeNotes.saveNoteNow(''))
     } catch (reason) {
@@ -348,7 +351,7 @@ export default function App() {
    * 两道处理：DOMPurify 净化（笔记内容可能是粘贴来的，绝不当可信 HTML），
    * 再把附件相对路径改写成自定义协议，外链图片直接抹掉 src（应用不联网）。
    */
-  const renderMarkdown = useCallback((source: string): string => {
+  const renderMarkdown = useCallback((source: string, missing: Set<string>): string => {
     const raw = marked.parse(source, { gfm: true, breaks: true, async: false })
     const clean = DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
     const container = document.createElement('div')
@@ -356,7 +359,12 @@ export default function App() {
 
     container.querySelectorAll('img').forEach((img) => {
       const src = img.getAttribute('src') ?? ''
-      if (src.startsWith('attachments/')) {
+      if (src.startsWith('attachments/') && missing.has(src)) {
+        const gone = document.createElement('span')
+        gone.className = 'preview__blocked'
+        gone.textContent = `［图片缺失：${src.split('/').pop()}］`
+        img.replaceWith(gone)
+      } else if (src.startsWith('attachments/')) {
         // 不用 loading="lazy"：便签里图片数量很少，懒加载反而会让刚切到预览时图片空白
         img.setAttribute('src', `edgenote-media://local/${src}`)
       } else {
@@ -378,14 +386,105 @@ export default function App() {
     return container.innerHTML
   }, [])
 
-  const togglePreview = useCallback(() => {
-    setPreview((wasPreview) => {
-      if (!wasPreview) {
-        setPreviewHtml(renderMarkdown(editorRef.current?.value ?? ''))
+  /** 进预览前先问主进程"这些附件还在不在"，缺的当场换成提示，不依赖图片加载错误事件 */
+  const refreshPreview = useCallback(
+    async (source: string) => {
+      const paths = Array.from(new Set(source.match(/attachments\/[^\s)"']+/g) ?? []))
+      let missing: string[] = []
+      if (paths.length > 0) {
+        try {
+          missing = await window.edgeNotes.checkAttachments(paths)
+        } catch {
+          missing = []
+        }
       }
-      return !wasPreview
+      setPreviewHtml(renderMarkdown(source, new Set(missing)))
+    },
+    [renderMarkdown]
+  )
+
+  const viewMode = state?.settings.viewMode ?? 'edit'
+  const preview = viewMode === 'preview'
+
+  const setView = useCallback((mode: 'edit' | 'preview') => {
+    void window.edgeNotes
+      .setViewMode(mode)
+      .then(setState)
+      .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
+  }, [])
+
+  const togglePreview = useCallback(async () => {
+    if (viewMode === 'preview') {
+      setView('edit')
+      return
+    }
+    // 先把 HTML 算好再切模式，避免"预览区空白一帧"的闪烁
+    await refreshPreview(editorRef.current?.value ?? '')
+    setView('preview')
+  }, [refreshPreview, setView, viewMode])
+
+  // 进入预览（或内容被替换：载入、粘贴、清空）时重新渲染一次
+  useEffect(() => {
+    if (viewMode === 'preview') {
+      void refreshPreview(editorRef.current?.value ?? '')
+    }
+  }, [viewMode, contentVersion, refreshPreview])
+
+  /** 把加载失败的图片换成可读提示（附件被删 / 路径失效时） */
+  const replaceWithMissing = useCallback((img: HTMLImageElement) => {
+    const name = img.getAttribute('src')?.split('/').pop() ?? ''
+    const missing = document.createElement('span')
+    missing.className = 'preview__blocked'
+    missing.textContent = `［图片缺失：${name}］`
+    img.replaceWith(missing)
+  }, [])
+
+  // 预览里的图片加载失败时给出可读提示，而不是破图标。
+  // 两条路径都要覆盖：进入预览时监听后续的 error 事件；已经失败过的（complete 且宽为 0）当场替换。
+  useEffect(() => {
+    if (!preview) {
+      return
+    }
+    const root = previewRef.current
+    if (!root) {
+      return
+    }
+    const onError = (event: Event): void => {
+      const target = event.target as HTMLImageElement | null
+      if (target && target.tagName === 'IMG') {
+        replaceWithMissing(target)
+      }
+    }
+    root.addEventListener('error', onError, true)
+    root.querySelectorAll('img').forEach((img) => {
+      if (img.complete && img.naturalWidth === 0) {
+        replaceWithMissing(img)
+      }
     })
-  }, [renderMarkdown])
+    const sweep = setTimeout(() => {
+      root.querySelectorAll('img').forEach((img) => {
+        if (img.complete && img.naturalWidth === 0) {
+          replaceWithMissing(img)
+        }
+      })
+    }, 300)
+    return () => {
+      clearTimeout(sweep)
+      root.removeEventListener('error', onError, true)
+    }
+  }, [preview, previewHtml, replaceWithMissing])
+
+  // Ctrl/Cmd+E 在编辑与预览之间切换
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'e') {
+        event.preventDefault()
+        void togglePreview()
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [togglePreview])
 
   /** 剪贴板里的图片落盘，并在光标处插入 Markdown 图片语法 */
   const handlePaste = useCallback(async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
@@ -408,6 +507,7 @@ export default function App() {
         editor.setRangeText(`${prefix}![](${saved.relative})\n`, editor.selectionStart, editor.selectionEnd, 'end')
       }
       window.edgeNotes.updateNote(editor.value)
+      setContentVersion((version) => version + 1)
       setAttachError(null)
     } catch (reason) {
       setAttachError(reason instanceof Error ? reason.message : String(reason))
@@ -655,7 +755,12 @@ export default function App() {
       />
 
       {preview ? (
-        <div className="preview" id="note-preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+        <div
+          className="preview"
+          id="note-preview"
+          ref={previewRef}
+          dangerouslySetInnerHTML={{ __html: previewHtml }}
+        />
       ) : null}
 
       {attachError ? <div className="errorBar">图片插入失败：{attachError}</div> : null}

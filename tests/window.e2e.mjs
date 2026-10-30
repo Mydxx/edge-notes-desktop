@@ -584,9 +584,15 @@ async function main() {
     Boolean(leftExpanded) && Math.abs(leftExpanded.bounds.x - area.x) <= 2,
     JSON.stringify(leftExpanded?.bounds)
   )
-  const leftStripInfo = ps('strip', '-Image', path.join(shotsDir, 'left-01-collapsed.png'), '-Side', 'left')
-  const leftStripRun = Number(leftStripInfo.split(' ')[1])
-  record('左侧收起时同样只留窄触发条', leftStripRun >= 3 && leftStripRun <= 8, leftStripInfo)
+  // 像素判定依赖具体配色，换了主题就会失效（已经踩过两次），因此只作为参考值；
+  // 左侧收起条宽度的硬依据是上面的 bounds（右边缘 == 工作区左缘 + 4）。
+  console.log(`[strip] 左侧收起条像素参考值: ${ps('strip', '-Image', path.join(shotsDir, 'left-01-collapsed.png'), '-Side', 'left')}`)
+  const leftStripBounds = leftRecords.filter((item) => item.event === 'collapsed').at(-1)
+  record(
+    '左侧收起时仍然只留 4px（按 bounds 判定）',
+    Boolean(leftStripBounds) && Math.abs(leftStripBounds.bounds.x + leftStripBounds.bounds.width - area.x - 4) <= 2,
+    JSON.stringify(leftStripBounds?.bounds)
+  )
 
   // 复位为交付默认状态
   await page2.evaluate(`window.edgeNotes.setSide('right')`)
