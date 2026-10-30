@@ -94,7 +94,23 @@ tests/lib/                 CDP 客户端、日志读取、PowerShell 驱动脚�
 | 选中笔记底色 / 文字 | `#FDFAF5` / `#39342D` | `--color-note-active-bg` / `--color-note-active-text` |
 | 强调色（低饱和墨蓝） | `#526D8A` | `--color-accent` |
 
-深色主题保持原样：导航/编辑区都等于面板底色 `#12151C`，选中态仍是低饱和蓝底。
+深色主题（低饱和暖灰，不用纯黑底/纯白字）：
+
+| 角色 | 色值 | 变量 |
+|---|---|---|
+| 主面板 | `#242321` | `--color-bg` |
+| 左侧导航 | `#302E2A` | `--color-nav-bg` |
+| 编辑区 / 预览区 | `#292825` | `--color-editor-bg` |
+| 浮层（设置、重命名输入框） | `#37342F` | `--color-bg-raised` |
+| 凹槽（代码块、分段控件） | `#2C2A27` | `--color-bg-sunken` |
+| 分隔线 | `#454139` | `--color-border` |
+| 主要文字 | `#F0EAE0` | `--color-text` |
+| 次要文字 | `#B8AD9E` | `--color-text-dim` |
+| 弱提示文字 | `#A99D8C` | `--color-text-muted` |
+| 选中笔记 | `#3B3934` | `--color-note-active-bg` |
+| 强调色 | `#91A9C2` | `--color-accent` |
+
+实测对比度（深色）：正文 13.1:1、次要 7.1:1、弱提示 5.9:1、强调色 6.5:1，均超 WCAG AA。
 实测对比度（`test:visual` 里有断言）：浅色 正文 13.4:1 / 次要 5.5:1 / 强调 4.9:1；深色 正文 15.2:1 / 次要 7.0:1 —— 均达 WCAG AA 4.5:1。
 
 笔记是 **Markdown**：头栏的眼睛图标（或 **Ctrl+E**）在「编辑源码 / 预览」之间切换，模式会记进设置、重启沿用。直接 `Ctrl+V` 粘贴截图会把图片落到 `attachments\`，并在光标处插入 `![](attachments/xxx.png)`；预览用自定义协议 `edgenote-media://local/attachments/<file>` 读取，**只允许附件目录下的单层文件**（`../` 一律拒绝）。外链图片不加载（应用不联网），HTML 经 DOMPurify 净化（`<script>`/`onerror` 会被剔除）。

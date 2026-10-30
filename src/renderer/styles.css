@@ -77,40 +77,39 @@
   --trigger-width: 4px;
 }
 
-/* 深色主题：沿用之前的配色，视觉上更贴合长时间夜间使用 */
+/* 深色主题：低饱和暖灰 / 深棕灰，不用纯黑底、不用纯白字，长时间阅读不刺眼 */
 :root[data-theme='dark'] {
-  --color-bg: #12151c;
-  --color-bg-raised: #191e28;
-  --color-bg-sunken: #13161d;
-  --color-border: #242a37;
-  --color-border-strong: #313a4b;
-  --color-text: #e7eaf1;
-  --color-text-dim: #98a1b3;
-  /* 深色下次要文字同样提到 4.5:1（改前 #6d768a 为 3.3:1） */
-  --color-text-muted: #8a93a5;
-  --color-accent: #3b82f6;
-  --color-accent-soft: rgba(59, 130, 246, 0.16);
-  --color-accent-soft-strong: rgba(59, 130, 246, 0.24);
-  --color-strip: rgba(59, 130, 246, 0.55);
-  --color-danger: #ef8f8f;
-  --color-danger-text: #ffb4b4;
-  --color-danger-bg: #3a1c22;
-  --color-danger-strong: #4a2229;
-  --color-danger-hover: #5b2932;
-  --color-danger-quiet: rgba(239, 143, 143, 0.12);
-  --color-warn: #a99465;
-  /* 深色下三块面与原来一致（导航/编辑区都用面板底色），不改变既有观感 */
-  --color-nav-bg: #12151c;
-  --color-editor-bg: #12151c;
-  --color-note-active-bg: rgba(59, 130, 246, 0.16);
-  --color-note-active-text: #e7eaf1;
+  --color-bg: #242321;
+  --color-bg-raised: #37342f;
+  /* 三块面（由暗到亮）：外壳 #242321 → 编辑区 #292825 → 导航 #302E2A，浮层再亮一档 #37342F */
+  --color-nav-bg: #302e2a;
+  --color-editor-bg: #292825;
+  --color-bg-sunken: #2c2a27;
+  --color-border: #454139;
+  --color-border-strong: #554f45;
+  --color-text: #f0eae0;
+  --color-text-dim: #b8ad9e;
+  --color-text-muted: #a99d8c;
+  --color-accent: #91a9c2;
+  --color-accent-soft: rgba(145, 169, 194, 0.14);
+  --color-accent-soft-strong: rgba(145, 169, 194, 0.22);
+  --color-strip: rgba(145, 169, 194, 0.5);
+  --color-note-active-bg: #3b3934;
+  --color-note-active-text: #f0eae0;
+  --color-danger: #e6a49b;
+  --color-danger-text: #f0b6ad;
+  --color-danger-bg: #3f2723;
+  --color-danger-strong: #55322d;
+  --color-danger-hover: #593630;
+  --color-danger-quiet: rgba(230, 164, 155, 0.12);
+  --color-warn: #c9b489;
   --color-scrim: rgba(0, 0, 0, 0.62);
-  --color-hover: rgba(255, 255, 255, 0.07);
-  --color-btn-hover: #3b465c;
-  --color-placeholder: #545c6d;
-  --color-scroll-thumb: #2c3342;
-  --color-scroll-thumb-hover: #3a4356;
-  --shadow-popover: 0 10px 26px rgba(0, 0, 0, 0.5);
+  --color-hover: rgba(240, 234, 224, 0.06);
+  --color-btn-hover: #4a463d;
+  --color-placeholder: #8b8173;
+  --color-scroll-thumb: #4a463f;
+  --color-scroll-thumb-hover: #5b564c;
+  --shadow-popover: 0 12px 30px rgba(0, 0, 0, 0.55);
   color-scheme: dark;
 }
 

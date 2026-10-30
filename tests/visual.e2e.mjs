@@ -17,6 +17,7 @@ import {
   resetArtifacts,
   runCleanup,
   waitChildExit,
+  waitFor,
   waitState
 } from './lib/harness.mjs'
 
@@ -222,11 +223,29 @@ async function main() {
     await delay(150)
 
     // 5-2. 主题与字号
+    // 切换前后量一次尺寸：只换颜色，不应有布局跳动
+    const dimsBeforeTheme = await page.evaluate(`(() => {
+      const panel = document.querySelector('.panel').getBoundingClientRect()
+      const nav = document.getElementById('notes-nav').getBoundingClientRect()
+      const editor = document.getElementById('note-editor').getBoundingClientRect()
+      return { panelW: Math.round(panel.width), panelH: Math.round(panel.height), navW: Math.round(nav.width), editorW: Math.round(editor.width) }
+    })()`)
     await page.evaluate(`window.edgeNotes.setTheme('dark')`)
     await delay(350)
     await shot('09-dark-350')
     const darkApplied = await page.evaluate(`document.documentElement.dataset.theme`)
     record('深色主题可切换并生效', darkApplied === 'dark', String(darkApplied))
+    const dimsAfterTheme = await page.evaluate(`(() => {
+      const panel = document.querySelector('.panel').getBoundingClientRect()
+      const nav = document.getElementById('notes-nav').getBoundingClientRect()
+      const editor = document.getElementById('note-editor').getBoundingClientRect()
+      return { panelW: Math.round(panel.width), panelH: Math.round(panel.height), navW: Math.round(nav.width), editorW: Math.round(editor.width) }
+    })()`)
+    record(
+      '切换主题不产生布局跳动',
+      JSON.stringify(dimsBeforeTheme) === JSON.stringify(dimsAfterTheme),
+      `${JSON.stringify(dimsBeforeTheme)} → ${JSON.stringify(dimsAfterTheme)}`
+    )
     const darkContrast = await measureContrast()
     record(
       '深色：正文与次要文字对比度 ≥ 4.5（WCAG AA）',
@@ -234,23 +253,117 @@ async function main() {
       `text=${darkContrast.text} dim=${darkContrast.dim} muted=${darkContrast.muted}`
     )
 
-    // 深色主题不受暖色改造影响：导航/编辑区仍是原面板底色，选中态仍是低饱和蓝
+    // 深色配色：逐项比对计算样式，确保三块面/文字/强调色与规范一致
     const darkDesign = await page.evaluate(`(() => {
       const nav = document.getElementById('notes-nav')
       const row = document.querySelector('.noteRow--active')
+      const probe = (name) => {
+        const el = document.createElement('div')
+        el.style.color = 'var(' + name + ')'
+        document.body.appendChild(el)
+        const color = getComputedStyle(el).color
+        el.remove()
+        return color
+      }
       return {
-        navBg: getComputedStyle(nav).backgroundColor,
-        editorBg: getComputedStyle(document.getElementById('note-editor')).backgroundColor,
         panelBg: getComputedStyle(document.querySelector('.panel')).backgroundColor,
-        activeBg: row ? getComputedStyle(row).backgroundColor : ''
+        navBg: getComputedStyle(nav).backgroundColor,
+        navBorder: getComputedStyle(nav).borderRightColor,
+        editorBg: getComputedStyle(document.getElementById('note-editor')).backgroundColor,
+        activeBg: row ? getComputedStyle(row).backgroundColor : '',
+        activeColor: row ? getComputedStyle(row).color : '',
+        raised: probe('--color-bg-raised'),
+        text: probe('--color-text'),
+        dim: probe('--color-text-dim'),
+        muted: probe('--color-text-muted'),
+        accent: probe('--color-accent')
       }
     })()`)
+    record('深色：主面板 #242321', darkDesign.panelBg === 'rgb(36, 35, 33)', darkDesign.panelBg)
+    record('深色：导航 #302E2A', darkDesign.navBg === 'rgb(48, 46, 42)', darkDesign.navBg)
+    record('深色：编辑区 #292825', darkDesign.editorBg === 'rgb(41, 40, 37)', darkDesign.editorBg)
+    record('深色：浮层 #37342F', darkDesign.raised === 'rgb(55, 52, 47)', darkDesign.raised)
+    record('深色：分隔线 #454139', darkDesign.navBorder === 'rgb(69, 65, 57)', darkDesign.navBorder)
+    record('深色：主要文字 #F0EAE0', darkDesign.text === 'rgb(240, 234, 224)', darkDesign.text)
+    record('深色：次要文字 #B8AD9E', darkDesign.dim === 'rgb(184, 173, 158)', darkDesign.dim)
+    record('深色：弱提示 #A99D8C', darkDesign.muted === 'rgb(169, 157, 140)', darkDesign.muted)
+    record('深色：强调色 #91A9C2', darkDesign.accent === 'rgb(145, 169, 194)', darkDesign.accent)
     record(
-      '深色：导航与编辑区仍是面板底色（未被浅色配色污染）',
-      darkDesign.navBg === darkDesign.panelBg && darkDesign.editorBg === darkDesign.panelBg,
-      `${darkDesign.navBg} / ${darkDesign.panelBg}`
+      '深色：选中笔记 #3B3934 + 主文字色',
+      darkDesign.activeBg === 'rgb(59, 57, 52)' && darkDesign.activeColor === 'rgb(240, 234, 224)',
+      `${darkDesign.activeBg} / ${darkDesign.activeColor}`
     )
-    record('深色：选中态仍为低饱和蓝底', darkDesign.activeBg === 'rgba(59, 130, 246, 0.16)', darkDesign.activeBg)
+    record(
+      '深色：三块面互不相同且都不是纯黑',
+      darkDesign.panelBg !== darkDesign.navBg &&
+        darkDesign.navBg !== darkDesign.editorBg &&
+        darkDesign.panelBg !== 'rgb(0, 0, 0)' &&
+        darkDesign.text !== 'rgb(255, 255, 255)'
+    )
+
+    // Markdown 预览在深色下的完整适配（标题/链接/引用/代码块/分割线）
+    const contentBeforeMd = await page.evaluate(`document.getElementById('note-editor').value`)
+    const mdSample = '# 深色标题\n\n正文 **粗体** 与 [链接](https://example.com)\n\n> 引用一句\n\n```\ncode block\n```\n\n---\n'
+    await page.evaluate(
+      `(() => { document.getElementById('note-editor').value = ${JSON.stringify(mdSample)}; window.edgeNotes.updateNote(${JSON.stringify(mdSample)}) })()`
+    )
+    await page.evaluate(`window.edgeNotes.setViewMode('preview')`)
+    await waitFor(page, `document.querySelector('#note-preview h1') !== null`, 4000, '深色 Markdown 预览')
+    const mdColors = await page.evaluate(`(() => {
+      const root = document.querySelector('#note-preview')
+      const css = (el, prop) => (el ? getComputedStyle(el)[prop] : '')
+      return {
+        previewBg: css(root, 'backgroundColor'),
+        h1: css(root.querySelector('h1'), 'color'),
+        link: css(root.querySelector('a'), 'color'),
+        quoteBorder: css(root.querySelector('blockquote'), 'borderLeftColor'),
+        quoteText: css(root.querySelector('blockquote'), 'color'),
+        codeBg: css(root.querySelector('pre'), 'backgroundColor'),
+        hrBorder: css(root.querySelector('hr'), 'borderTopColor')
+      }
+    })()`)
+    record('深色预览：底色与编辑区一致', mdColors.previewBg === 'rgb(41, 40, 37)', mdColors.previewBg)
+    record('深色预览：标题用主文字色', mdColors.h1 === 'rgb(240, 234, 224)', mdColors.h1)
+    record('深色预览：链接用低饱和强调色', mdColors.link === 'rgb(145, 169, 194)', mdColors.link)
+    record('深色预览：引用用次要文字 + 分隔线', mdColors.quoteText === 'rgb(184, 173, 158)' && mdColors.quoteBorder === 'rgb(85, 79, 69)', `${mdColors.quoteText} / ${mdColors.quoteBorder}`)
+    record('深色预览：代码块有独立底色', mdColors.codeBg === 'rgb(44, 42, 39)', mdColors.codeBg)
+    record('深色预览：分割线使用分隔线色', mdColors.hrBorder === 'rgb(69, 65, 57)', mdColors.hrBorder)
+    await page.captureScreenshot(path.join(shotsDir, '11-dark-markdown.png'))
+
+    // 深色下的弹窗/菜单：浮层、分段控件、按钮、输入框都要同一套色
+    await page.evaluate(`document.getElementById('open-settings').click()`)
+    await waitFor(page, `document.querySelector('.settings') !== null`, 3000, '深色设置弹层')
+    const darkPopover = await page.evaluate(`(() => {
+      const panel = document.querySelector('.settings')
+      const segmented = panel.querySelector('.segmented')
+      const pressed = panel.querySelector('.segmented button[aria-pressed="true"]')
+      const switchBtn = panel.querySelector('.switchBtn')
+      const css = (el, prop) => (el ? getComputedStyle(el)[prop] : '')
+      return {
+        bg: css(panel, 'backgroundColor'),
+        border: css(panel, 'borderColor'),
+        track: css(segmented, 'backgroundColor'),
+        pressedColor: css(pressed, 'color'),
+        pressedBg: css(pressed, 'backgroundColor'),
+        switchColor: css(switchBtn, 'color'),
+        label: css(panel.querySelector('.settings__label'), 'color')
+      }
+    })()`)
+    record('深色弹层：浮层底色 #37342F', darkPopover.bg === 'rgb(55, 52, 47)', darkPopover.bg)
+    record('深色弹层：边框用分隔线色', darkPopover.border === 'rgb(69, 65, 57)', darkPopover.border)
+    record('深色弹层：分段控件有独立底槽', darkPopover.track === 'rgb(44, 42, 39)', darkPopover.track)
+    record('深色弹层：选中项用强调色', darkPopover.pressedColor === 'rgb(145, 169, 194)', darkPopover.pressedColor)
+    record('深色弹层：标签用次要文字色', darkPopover.label === 'rgb(184, 173, 158)', darkPopover.label)
+    await page.captureScreenshot(path.join(shotsDir, '12-dark-settings.png'))
+    await page.evaluate(`document.getElementById('open-settings').click()`)
+    await delay(200)
+
+    // 还原内容与模式，后续用例继续用原来的文本
+    await page.evaluate(`window.edgeNotes.setViewMode('edit')`)
+    await page.evaluate(
+      `(() => { document.getElementById('note-editor').value = ${JSON.stringify(contentBeforeMd)}; window.edgeNotes.updateNote(${JSON.stringify(contentBeforeMd)}) })()`
+    )
+    await delay(300)
 
     await page.evaluate(`window.edgeNotes.setFontSize('large')`)
     await delay(350)

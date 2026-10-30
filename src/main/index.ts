@@ -145,7 +145,7 @@ function createWindow(): BrowserWindow {
     height: 640,
     show: false,
     frame: false,
-    backgroundColor: dark ? '#12151c' : '#f7f3ec',
+    backgroundColor: dark ? '#242321' : '#f7f3ec',
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -201,10 +201,10 @@ function createWindow(): BrowserWindow {
     if (code === -3 || isMainFrame === false || win.isDestroyed()) {
       return
     }
-    const html = `<meta charset="utf-8"><body style="margin:0;padding:18px;background:#12151c;color:#e7eaf1;font:13px/1.7 'Microsoft YaHei UI',sans-serif">
+    const html = `<meta charset="utf-8"><body style="margin:0;padding:18px;background:#242321;color:#f0eae0;font:13px/1.7 'Microsoft YaHei UI',sans-serif">
 <div style="font-weight:600;margin-bottom:8px">界面加载失败</div>
-<div style="color:#98a1b3">${description || 'unknown error'}（${code}）</div>
-<div style="color:#6d768a;margin-top:10px">请重新执行 npm run build 后重启应用。</div>
+<div style="color:#b8ad9e">${description || 'unknown error'}（${code}）</div>
+<div style="color:#a99d8c;margin-top:10px">请重新执行 npm run build 后重启应用。</div>
 </body>`
     void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
   })
@@ -246,7 +246,7 @@ function applySettings(patch: Partial<EdgeNotesSettings>): EdgeNotesState {
   // 主题变化时同步原生窗口底色，避免拖动/重绘时露出旧主题的底色
   if (mainWindow && !mainWindow.isDestroyed()) {
     const dark = next.theme === 'dark' || (next.theme === 'system' && nativeTheme.shouldUseDarkColors)
-    mainWindow.setBackgroundColor(dark ? '#12151c' : '#f7f3ec')
+    mainWindow.setBackgroundColor(dark ? '#242321' : '#f7f3ec')
   }
   const state = buildState()
   broadcast()

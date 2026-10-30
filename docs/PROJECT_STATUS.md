@@ -398,6 +398,47 @@ npm run test:visual → 22（含对比度、多宽度布局）
 typecheck 0 error；窗口 82 + 笔记 72 + 桌面 37 + 视觉 32 = 223 项断言全绿
 ```
 
+## 五-11、深色主题（低饱和暖灰）
+
+按指定 10 个 HEX 重做深色，浅色**一个值都没动**。
+
+| 角色 | 指定值 | 变量 |
+|---|---|---|
+| 主面板背景 | `#242321` | `--color-bg` |
+| 左侧导航背景 | `#302E2A` | `--color-nav-bg` |
+| 编辑区域背景 | `#292825` | `--color-editor-bg` |
+| 浮层背景 | `#37342F` | `--color-bg-raised` |
+| 分隔线 | `#454139` | `--color-border` |
+| 主要文字 | `#F0EAE0` | `--color-text` |
+| 次要文字 | `#B8AD9E` | `--color-text-dim` |
+| 弱提示文字 | `#A99D8C` | `--color-text-muted` |
+| 选中笔记背景 | `#3B3934` | `--color-note-active-bg` |
+| 强调色 | `#91A9C2` | `--color-accent` |
+
+派生项（保持同一色系，不引入新色相）：`--color-bg-sunken: #2C2A27`（代码块/分段控件底槽）、
+`--color-border-strong: #554F45`、`--color-danger*` 换成暖红（`#E6A49B` / `#3F2723` 等）、
+`--color-warn: #C9B489`、`--color-hover: rgba(240,234,224,.06)`、`--color-scroll-thumb: #4A463F`。
+
+### 逐条落实
+
+1. **全区域统一**：导航、编辑/预览、设置弹层、重命名输入框、分段控件、文字按钮、确认条、错误条、图片放大遮罩全部走变量，组件层零硬编码（测试逐个比对计算样式）。
+2. **Markdown 完整适配**：标题/正文用 `--color-text`，链接用强调色，引用用 `--color-text-dim` + `--color-border-strong` 边线，代码块用 `--color-bg-sunken`，分割线用 `--color-border`，图片（自行绘制的内容）不受影响。
+3. **对比度**：正文 13.12:1、次要 7.11:1、弱提示 5.90:1、强调 6.49:1，均 > 4.5（AA）。
+4. **浅色不变**：未修改浅色 token；`test:visual` 仍逐项断言 `#EEE8DD` / `#FDFAF5` / `#39342D` 等原值。
+5. **切换自然**：主进程首帧底色同步为 `#242321`（原来是 `#12151C`，会在启动/切主题时闪一抹冷黑）；测试比对切换前后 panel/nav/editor 尺寸完全一致，无布局跳动。
+6. **选择持久化**：沿用 `settings.theme`，重启恢复（本轮未改机制）。
+7. **不重构**：只改 `:root[data-theme='dark']` 的 20 余个变量 + 主进程 3 处颜色常量。
+
+### 验证
+
+`test:visual` 新增 19 项深色断言：10 个色值的精确 RGB、三块面互不相同且非纯黑、四类文字对比度、Markdown 预览 6 项（底色/标题/链接/引用/代码块/分割线）、弹层 5 项（底色/边框/底槽/选中项/标签）、切换无布局跳动。
+
+```
+typecheck 0 error；窗口 82 + 笔记 72 + 桌面 37 + 视觉 53 = 244 项断言全绿
+```
+
+截图：`tests/artifacts/visual/09-dark-350.png`（深色正文）、`11-dark-markdown.png`（深色 Markdown）、`12-dark-settings.png`（深色设置弹层）。
+
 ## 六、实际执行的验证记录
 
 ```
