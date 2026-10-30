@@ -144,6 +144,41 @@ async function main() {
     record('浅色：强调色对比度 ≥ 4.5', lightContrast.accent >= 4.5, `ratio=${lightContrast.accent}`)
     record('浅色：占位文字 ≥ 3（不刺眼但可辨认）', lightContrast.placeholder >= 3, `ratio=${lightContrast.placeholder}`)
 
+    // 三块面与选中态：色值必须与设计一致，且导航↔编辑区只差一档亮度（不出现突兀色块）
+    const design = await page.evaluate(`(() => {
+      const parse = (c) => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number)
+      const lum = (rgb) => {
+        const f = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4) })
+        return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2]
+      }
+      const ratio = (a, b) => { const x = [lum(a), lum(b)].sort((m, n) => n - m); return Number(((x[0] + 0.05) / (x[1] + 0.05)).toFixed(2)) }
+      const pick = (name) => {
+        const probe = document.createElement('div')
+        probe.style.color = 'var(' + name + ')'
+        document.body.appendChild(probe)
+        const color = parse(getComputedStyle(probe).color)
+        probe.remove()
+        return color
+      }
+      const nav = document.getElementById('notes-nav')
+      const activeRow = document.querySelector('.noteRow--active')
+      return {
+        navBg: getComputedStyle(nav).backgroundColor,
+        editorBg: getComputedStyle(document.getElementById('note-editor')).backgroundColor,
+        activeBg: activeRow ? getComputedStyle(activeRow).backgroundColor : '',
+        activeColor: activeRow ? getComputedStyle(activeRow).color : '',
+        navVsEditor: ratio(pick('--color-nav-bg'), pick('--color-editor-bg')),
+        activeText: ratio(pick('--color-note-active-text'), pick('--color-note-active-bg')),
+        navWidth: Math.round(nav.getBoundingClientRect().width)
+      }
+    })()`)
+    record('导航底色为 #EEE8DD', design.navBg === 'rgb(238, 232, 221)', design.navBg)
+    record('编辑区底色为 #FDFAF5', design.editorBg === 'rgb(253, 250, 245)', design.editorBg)
+    record('选中笔记底色 #FDFAF5 / 文字 #39342D', design.activeBg === 'rgb(253, 250, 245)' && design.activeColor === 'rgb(57, 52, 45)', `${design.activeBg} / ${design.activeColor}`)
+    record('导航与编辑区只差一档亮度（低对比，不突兀）', design.navVsEditor > 1 && design.navVsEditor < 1.2, `ratio=${design.navVsEditor}`)
+    record('选中笔记文字对比度 ≥ 4.5', design.activeText >= 4.5, `ratio=${design.activeText}`)
+    record('展开态导航宽度 148px', design.navWidth === 148, `${design.navWidth}px`)
+
     // 2. 长文本 @ 默认宽度
     await page.evaluate(`document.getElementById('note-editor').focus()`)
     await page.insertText(LONG_TEXT)
@@ -199,6 +234,24 @@ async function main() {
       `text=${darkContrast.text} dim=${darkContrast.dim} muted=${darkContrast.muted}`
     )
 
+    // 深色主题不受暖色改造影响：导航/编辑区仍是原面板底色，选中态仍是低饱和蓝
+    const darkDesign = await page.evaluate(`(() => {
+      const nav = document.getElementById('notes-nav')
+      const row = document.querySelector('.noteRow--active')
+      return {
+        navBg: getComputedStyle(nav).backgroundColor,
+        editorBg: getComputedStyle(document.getElementById('note-editor')).backgroundColor,
+        panelBg: getComputedStyle(document.querySelector('.panel')).backgroundColor,
+        activeBg: row ? getComputedStyle(row).backgroundColor : ''
+      }
+    })()`)
+    record(
+      '深色：导航与编辑区仍是面板底色（未被浅色配色污染）',
+      darkDesign.navBg === darkDesign.panelBg && darkDesign.editorBg === darkDesign.panelBg,
+      `${darkDesign.navBg} / ${darkDesign.panelBg}`
+    )
+    record('深色：选中态仍为低饱和蓝底', darkDesign.activeBg === 'rgba(59, 130, 246, 0.16)', darkDesign.activeBg)
+
     await page.evaluate(`window.edgeNotes.setFontSize('large')`)
     await delay(350)
     await shot('10-dark-large-font')
@@ -228,6 +281,23 @@ async function main() {
     await delay(200)
 
     // 8. 收起态：截图屏幕右缘的触发条
+    // 收起导航：只缩窄，不换底色（避免突然出现一块深色竖条）
+    await page.evaluate(`document.getElementById('toggle-nav').click()`)
+    await delay(400)
+    const collapsedNav = await page.evaluate(`(() => {
+      const nav = document.getElementById('notes-nav')
+      return {
+        width: Math.round(nav.getBoundingClientRect().width),
+        bg: getComputedStyle(nav).backgroundColor,
+        labelHidden: document.querySelector('.notesNav__label') === null
+      }
+    })()`)
+    record('收起态导航宽 40px 且保持同一底色', collapsedNav.width === 40 && collapsedNav.bg === 'rgb(238, 232, 221)', JSON.stringify(collapsedNav))
+    record('收起态隐藏文字标签、只留首字', collapsedNav.labelHidden === true)
+    await page.captureScreenshot(path.join(shotsDir, '09-nav-collapsed.png'))
+    await page.evaluate(`document.getElementById('toggle-nav').click()`)
+    await delay(300)
+
     await page.evaluate('window.edgeNotes.setPinnedOpen(false)')
     // 编辑框聚焦会按设计抑制自动收起，截图前必须先失焦
     await page.evaluate(`(() => { const el = document.activeElement; if (el && el.blur) el.blur() })()`)

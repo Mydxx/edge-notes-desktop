@@ -12,9 +12,17 @@
   --color-border-strong: #d2c7b4;
   --color-text: #2b2721;
   --color-text-dim: #6b6153;
-  /* 次要文字也要过 WCAG AA：实测对比度 4.7:1（改前 #8b8272 只有 3.4:1） */
-  --color-text-muted: #75695a;
+  /* 次要文字：实测对比度 4.6:1，仍满足 WCAG AA */
+  --color-text-muted: #756d62;
   --color-accent: #526d8a;
+
+  /* 三块面：外壳（头/底栏）#F7F3EC、左侧导航 #EEE8DD、编辑区 #FDFAF5。
+     靠亮度差区分，而不是靠色块。 */
+  --color-nav-bg: #eee8dd;
+  --color-editor-bg: #fdfaf5;
+  /* 选中的笔记：轻微抬亮 + 更深的文字，不用鲜艳强调色 */
+  --color-note-active-bg: #fdfaf5;
+  --color-note-active-text: #39342d;
   --color-accent-soft: rgba(82, 109, 138, 0.1);
   --color-accent-soft-strong: rgba(82, 109, 138, 0.2);
   --color-strip: rgba(82, 109, 138, 0.45);
@@ -30,6 +38,7 @@
   --color-placeholder: #8f8471;
   --color-scroll-thumb: #d9cfbe;
   --color-scroll-thumb-hover: #c8bba6;
+  --color-scrim: rgba(24, 20, 14, 0.74);
   --shadow-popover: 0 10px 26px rgba(60, 50, 35, 0.14);
   color-scheme: light;
 
@@ -90,6 +99,12 @@
   --color-danger-hover: #5b2932;
   --color-danger-quiet: rgba(239, 143, 143, 0.12);
   --color-warn: #a99465;
+  /* 深色下三块面与原来一致（导航/编辑区都用面板底色），不改变既有观感 */
+  --color-nav-bg: #12151c;
+  --color-editor-bg: #12151c;
+  --color-note-active-bg: rgba(59, 130, 246, 0.16);
+  --color-note-active-text: #e7eaf1;
+  --color-scrim: rgba(0, 0, 0, 0.62);
   --color-hover: rgba(255, 255, 255, 0.07);
   --color-btn-hover: #3b465c;
   --color-placeholder: #545c6d;
@@ -161,8 +176,8 @@ body {
   flex-direction: column;
   width: var(--nav-width, 148px);
   border-right: 1px solid var(--color-border);
-  /* 与正文同色，只用一条分隔线区分，避免一条深色竖带把界面压重 */
-  background: transparent;
+  /* 灰米色导航面：与编辑区只差一档亮度，展开/收起都用同一块色，不出现突兀色块 */
+  background: var(--color-nav-bg);
   transition: width 0.16s ease;
 }
 
@@ -214,8 +229,8 @@ body {
 }
 
 .noteRow--active {
-  background: var(--color-accent-soft);
-  color: var(--color-text);
+  background: var(--color-note-active-bg);
+  color: var(--color-note-active-text);
   font-weight: 500;
 }
 
@@ -704,7 +719,8 @@ body {
   border: none;
   outline: none;
   resize: none;
-  background: transparent;
+  /* 编辑区比外壳更亮一档（#FDFAF5），但仍是米白，不是纯白 */
+  background: var(--color-editor-bg);
   color: var(--color-text);
   font: 400 var(--text-body) / var(--leading-body) var(--font-ui);
   letter-spacing: 0.01em;
@@ -748,6 +764,7 @@ body {
   padding: var(--space-6) var(--space-7) 18px;
   overflow-y: auto;
   overflow-wrap: anywhere;
+  background: var(--color-editor-bg);
   color: var(--color-text);
   font: 400 var(--text-body) / var(--leading-body) var(--font-ui);
   letter-spacing: 0.012em;
@@ -871,7 +888,7 @@ body {
   display: grid;
   place-items: center;
   padding: var(--space-6);
-  background: rgba(24, 20, 14, 0.74);
+  background: var(--color-scrim);
   cursor: zoom-out;
 }
 

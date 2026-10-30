@@ -81,7 +81,20 @@ tests/lib/                 CDP 客户端、日志读取、PowerShell 驱动脚�
 快捷键：`Ctrl+N` 新建、`Ctrl+S` 立即保存、`Ctrl+Tab` / `Ctrl+Shift+Tab` 上/下一篇、`Ctrl+E` 编辑/预览切换。
 改名只动索引里的标题，正文文件名用固定 id，**图片相对路径与附件引用不受影响**；删除会移入回收站并先确认。
 
-主题：浅色为**暖米白纸感**（底色 `#f7f3ec`，不纯白）＋低饱和墨蓝强调色，深色沿用暗色方案；字号三档。
+主题：浅色为**暖米白纸感**，三块面靠亮度差区分（不是靠色块）：
+
+| 角色 | 色值 | 变量 |
+|---|---|---|
+| 主面板（头/底栏） | `#F7F3EC` | `--color-bg` |
+| 左侧导航（展开 / 收起同色） | `#EEE8DD` | `--color-nav-bg` |
+| 编辑区 / 预览区 | `#FDFAF5` | `--color-editor-bg` |
+| 分隔线 | `#E4DCCD` | `--color-border` |
+| 主要文字 | `#2B2721` | `--color-text` |
+| 次要文字 | `#756D62` | `--color-text-muted` |
+| 选中笔记底色 / 文字 | `#FDFAF5` / `#39342D` | `--color-note-active-bg` / `--color-note-active-text` |
+| 强调色（低饱和墨蓝） | `#526D8A` | `--color-accent` |
+
+深色主题保持原样：导航/编辑区都等于面板底色 `#12151C`，选中态仍是低饱和蓝底。
 实测对比度（`test:visual` 里有断言）：浅色 正文 13.4:1 / 次要 5.5:1 / 强调 4.9:1；深色 正文 15.2:1 / 次要 7.0:1 —— 均达 WCAG AA 4.5:1。
 
 笔记是 **Markdown**：头栏的眼睛图标（或 **Ctrl+E**）在「编辑源码 / 预览」之间切换，模式会记进设置、重启沿用。直接 `Ctrl+V` 粘贴截图会把图片落到 `attachments\`，并在光标处插入 `![](attachments/xxx.png)`；预览用自定义协议 `edgenote-media://local/attachments/<file>` 读取，**只允许附件目录下的单层文件**（`../` 一律拒绝）。外链图片不加载（应用不联网），HTML 经 DOMPurify 净化（`<script>`/`onerror` 会被剔除）。
