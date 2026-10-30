@@ -13,6 +13,7 @@ import {
   expandByHover,
   launchApp,
   ps,
+  quitApp,
   resetArtifacts,
   runCleanup,
   waitChildExit,
@@ -174,6 +175,82 @@ async function main() {
     const instanceInfo = ps('count-instances', '-TextFile', userDataDir)
     const leftoverCount = Number(instanceInfo.split(' ')[1])
     record('退出后无残留实例', leftoverCount === 0 && app.exitCode !== null, `${instanceInfo} exitCode=${app.exitCode}`)
+
+    // ------------------------------- 七、数据目录迁移（含重启后真正生效）
+    const pointerFile = path.join(artifactsDir, 'desktop-pointer.json')
+    const migrateTarget = path.join(artifactsDir, 'desktop-migrated')
+    rmSync(pointerFile, { force: true })
+    rmSync(migrateTarget, { recursive: true, force: true })
+
+    const envWithPointer = { EDGE_NOTES_POINTER: pointerFile }
+    const app2From = readLog(logFile).length
+    const app2 = launchApp({ userDataDir, logFile, cdpPort, extraEnv: envWithPointer })
+    try {
+      await waitForEvent(logFile, 'dock-started', { timeoutMs: 40000, fromIndex: app2From })
+      const page2 = await connectPage(cdpPort)
+      await waitFor(page2, `document.getElementById('note-editor') !== null`, 5000, '编辑器就绪')
+      const dirBefore = await page2.evaluate('window.edgeNotes.getDataDir()')
+      record(
+        '迁移前使用的是命令行指定的数据目录',
+        path.resolve(dirBefore.current) === path.resolve(userDataDir),
+        dirBefore.current
+      )
+
+      await page2.evaluate(`document.getElementById('note-editor').focus()`)
+      await page2.insertText('迁移前的内容')
+      await delay(900)
+
+      const migrated = await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(migrateTarget)})`)
+      const noteInTarget = path.join(migrateTarget, 'edge-notes-note.txt')
+      const settingsInTarget = path.join(migrateTarget, 'edge-notes-settings.json')
+      record(
+        '迁移后新目录里数据齐全',
+        existsSync(noteInTarget) && existsSync(settingsInTarget) && readFileSync(noteInTarget, 'utf8').includes('迁移前的内容'),
+        JSON.stringify(migrated.copied)
+      )
+      const pointerRaw = existsSync(pointerFile) ? JSON.parse(readFileSync(pointerFile, 'utf8')) : null
+      record('迁移后写入指针文件（指向新目录）', pointerRaw?.dataDir === migrateTarget, JSON.stringify(pointerRaw))
+      record('迁移结果要求重启生效', migrated.requiresRestart === true)
+
+      // 二次迁移到已有数据的目录应被拒绝（防止覆盖别人/自己的笔记）
+      let duplicateError = null
+      try {
+        await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(migrateTarget)})`)
+      } catch (error) {
+        duplicateError = error instanceof Error ? error.message : String(error)
+      }
+      record('目标目录已有数据时拒绝覆盖', duplicateError !== null && duplicateError.length > 0, String(duplicateError).slice(0, 60))
+
+      quitApp(page2)
+      await waitChildExit(app2, 10000)
+      page2.close()
+    } catch (error) {
+      app2.kill()
+      throw error
+    }
+
+    // 重启：指针文件应让应用直接使用新目录，且笔记还在
+    const restartFrom = readLog(logFile).length
+    const app3 = launchApp({ userDataDir, logFile, cdpPort, extraEnv: envWithPointer })
+    try {
+      await waitForEvent(logFile, 'dock-started', { timeoutMs: 40000, fromIndex: restartFrom })
+      const restartRecords = readLog(logFile).slice(restartFrom)
+      const ready = restartRecords.find((item) => item.event === 'app-ready')
+      record(
+        '重启后按指针使用新的数据目录',
+        ready?.userData === migrateTarget,
+        `${ready?.userData ?? 'unknown'}`
+      )
+      const page3 = await connectPage(cdpPort)
+      const note = await page3.evaluate('window.edgeNotes.getNote()')
+      record('新目录里的笔记可直接读回', note.content.includes('迁移前的内容'), `${note.content.length} 字`)
+      quitApp(page3)
+      await waitChildExit(app3, 10000)
+      page3.close()
+    } catch (error) {
+      app3.kill()
+      throw error
+    }
 
     finish()
   } catch (error) {

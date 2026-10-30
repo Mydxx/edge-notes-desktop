@@ -7,6 +7,12 @@ export type DockPhase = 'collapsed' | 'expanding' | 'expanded' | 'collapsing'
 /** 自动收起延迟档位 */
 export type CollapseDelay = 300 | 700 | 1200
 
+/** 主题：浅色 / 深色 / 跟随系统 */
+export type ThemeMode = 'light' | 'dark' | 'system'
+
+/** 正文字号档位 */
+export type FontScale = 'small' | 'normal' | 'large'
+
 export interface EdgeNotesSettings {
   /** 停靠边：右侧（默认）/ 左侧 */
   side: DockSide
@@ -20,6 +26,24 @@ export interface EdgeNotesSettings {
   collapseDelay: CollapseDelay
   /** 登录 Windows 后自动启动（默认关闭） */
   launchAtLogin: boolean
+  /** 主题（默认浅色） */
+  theme: ThemeMode
+  /** 正文字号档位 */
+  fontSize: FontScale
+}
+
+/** 数据目录信息（目录本身不在 settings.json 里，避免自指） */
+export interface DataDirInfo {
+  current: string
+  isDefault: boolean
+  pointer: string
+}
+
+export interface MigrationResult {
+  from: string
+  to: string
+  copied: string[]
+  requiresRestart: boolean
 }
 
 export interface EdgeNotesRuntime {
@@ -71,8 +95,14 @@ export const IPC_CHANNELS = {
   setCollapseDelay: 'edge-notes:set-collapse-delay',
   setResizing: 'edge-notes:set-resizing',
   setHidden: 'edge-notes:set-hidden',
+  setTheme: 'edge-notes:set-theme',
+  setFontSize: 'edge-notes:set-font-size',
   getLoginItem: 'edge-notes:get-login-item',
   setLaunchAtLogin: 'edge-notes:set-launch-at-login',
+  getDataDir: 'edge-notes:get-data-dir',
+  pickDataDir: 'edge-notes:pick-data-dir',
+  setDataDir: 'edge-notes:set-data-dir',
+  relaunch: 'edge-notes:relaunch',
   quit: 'edge-notes:quit',
   stateChanged: 'edge-notes:state-changed',
   openSettings: 'edge-notes:open-settings',
@@ -95,8 +125,16 @@ export interface EdgeNotesApi {
   setResizing(value: boolean): void
   /** 隐藏到托盘 / 从托盘恢复 */
   setHidden(hidden: boolean): Promise<EdgeNotesState>
+  setTheme(theme: ThemeMode): Promise<EdgeNotesState>
+  setFontSize(scale: FontScale): Promise<EdgeNotesState>
   getLoginItemState(): Promise<LoginItemState>
   setLaunchAtLogin(enabled: boolean): Promise<EdgeNotesState>
+  getDataDir(): Promise<DataDirInfo>
+  /** 打开系统选择目录对话框，取消返回 null */
+  pickDataDir(): Promise<string | null>
+  /** 迁移数据目录（复制 + 校验 + 写指针），需要重启生效 */
+  setDataDir(dir: string): Promise<MigrationResult>
+  relaunch(): Promise<void>
   quit(): Promise<void>
 
   getNote(): Promise<NoteSnapshot>

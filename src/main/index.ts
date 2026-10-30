@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain, Menu } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
 import { IPC_CHANNELS } from '../shared/api'
 import type { DockPhase, DockSide, EdgeNotesSettings, EdgeNotesState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
+import { getDataDirInfo, migrateDataDir, resolveUserDataDir } from './data-location'
 import { EdgeDock } from './edge-dock'
 import { applyLoginItem, readLoginItem, reconcileLoginItem } from './login-item'
 import { log } from './log'
@@ -13,6 +14,9 @@ import { createTray, destroyTray, refreshTray } from './tray'
 
 // 明确应用名：userData 目录与单实例锁都基于它，避免与其它 Electron 应用互相覆盖数据/互相踢掉
 app.setName('Edge Notes Desktop')
+
+// 必须在 app ready 之前决定数据目录（用户可能已经把它挪到别的盘）
+resolveUserDataDir()
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL ?? ''
 
@@ -34,7 +38,9 @@ function buildState(): EdgeNotesState {
     alwaysOnTop: true,
     pinnedOpen: false,
     collapseDelay: COLLAPSE_DELAY_DEFAULT,
-    launchAtLogin: false
+    launchAtLogin: false,
+    theme: 'light',
+    fontSize: 'normal'
   }
   const phase = currentPhase()
   return {
@@ -98,13 +104,15 @@ function createWindow(): BrowserWindow {
   /** 渲染进程只自动恢复一次，连续崩溃说明环境有问题，直接退出而不是无限重载 */
   let rendererRecovered = false
   const settings = store?.get()
+  // 首帧底色必须跟主题一致，否则浅色主题启动时会先闪一下黑
+  const dark = settings?.theme === 'dark' || (settings?.theme === 'system' && nativeTheme.shouldUseDarkColors)
   const win = new BrowserWindow({
     title: 'Edge Notes',
     width: settings?.width ?? PANEL_WIDTH_DEFAULT,
     height: 640,
     show: false,
     frame: false,
-    backgroundColor: '#12151c',
+    backgroundColor: dark ? '#12151c' : '#f7f8fa',
     resizable: false,
     minimizable: false,
     maximizable: false,
@@ -202,6 +210,11 @@ function applySettings(patch: Partial<EdgeNotesSettings>): EdgeNotesState {
   }
   const next = store.update(patch)
   dock?.applySettings(next)
+  // 主题变化时同步原生窗口底色，避免拖动/重绘时露出旧主题的底色
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const dark = next.theme === 'dark' || (next.theme === 'system' && nativeTheme.shouldUseDarkColors)
+    mainWindow.setBackgroundColor(dark ? '#12151c' : '#f7f8fa')
+  }
   const state = buildState()
   broadcast()
   return state
@@ -268,6 +281,54 @@ function registerIpc(): void {
     dock?.setHidden(value)
     broadcast()
     return buildState()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.setTheme, (event, value: unknown) => {
+    requireSender(event)
+    if (value !== 'light' && value !== 'dark' && value !== 'system') {
+      throw new TypeError('theme must be light / dark / system')
+    }
+    return applySettings({ theme: value })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.setFontSize, (event, value: unknown) => {
+    requireSender(event)
+    if (value !== 'small' && value !== 'normal' && value !== 'large') {
+      throw new TypeError('fontSize must be small / normal / large')
+    }
+    return applySettings({ fontSize: value })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.getDataDir, (event) => {
+    requireSender(event)
+    return getDataDirInfo()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.pickDataDir, async (event) => {
+    requireSender(event)
+    const result = await dialog.showOpenDialog({
+      title: '选择 Edge Notes 数据目录',
+      properties: ['openDirectory', 'createDirectory']
+    })
+    return result.canceled ? null : (result.filePaths[0] ?? null)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.setDataDir, (event, value: unknown) => {
+    requireSender(event)
+    if (typeof value !== 'string' || !value.trim()) {
+      throw new TypeError('dataDir must be a non-empty string')
+    }
+    // 迁移前把内存里的最新内容落盘，否则复制到新目录的是旧快照
+    notes?.flushSync()
+    store?.flush()
+    return migrateDataDir(value)
+  })
+
+  ipcMain.handle(IPC_CHANNELS.relaunch, (event) => {
+    requireSender(event)
+    log('relaunch-requested', {})
+    app.relaunch()
+    app.exit(0)
   })
 
   ipcMain.handle(IPC_CHANNELS.getLoginItem, (event) => {

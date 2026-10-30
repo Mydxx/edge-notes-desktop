@@ -57,13 +57,13 @@ export function resetArtifacts(paths) {
   mkdirSync(artifactsDir, { recursive: true })
 }
 
-export function launchApp({ userDataDir, logFile, cdpPort, extraArgs = [] }) {
+export function launchApp({ userDataDir, logFile, cdpPort, extraArgs = [], extraEnv = {} }) {
   const child = spawn(
     electronPath,
     ['.', `--user-data-dir=${userDataDir}`, `--remote-debugging-port=${cdpPort}`, ...extraArgs],
     {
       cwd: root,
-      env: { ...process.env, EDGE_NOTES_LOG: logFile, EDGE_NOTES_SILENT: '1' },
+      env: { ...process.env, EDGE_NOTES_LOG: logFile, EDGE_NOTES_SILENT: '1', ...extraEnv },
       stdio: ['ignore', 'pipe', 'pipe']
     }
   )

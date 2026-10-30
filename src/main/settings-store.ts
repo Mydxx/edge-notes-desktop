@@ -1,6 +1,6 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { CollapseDelay, DockSide, EdgeNotesSettings } from '../shared/api'
+import type { CollapseDelay, DockSide, EdgeNotesSettings, FontScale, ThemeMode } from '../shared/api'
 import {
   COLLAPSE_DELAY_DEFAULT,
   COLLAPSE_DELAY_OPTIONS,
@@ -15,7 +15,9 @@ export const DEFAULT_SETTINGS: EdgeNotesSettings = {
   alwaysOnTop: true,
   pinnedOpen: false,
   collapseDelay: COLLAPSE_DELAY_DEFAULT,
-  launchAtLogin: false
+  launchAtLogin: false,
+  theme: 'light',
+  fontSize: 'normal'
 }
 
 /**
@@ -101,10 +103,19 @@ export function sanitizeSettings(input: Record<string, unknown>): EdgeNotesSetti
     ? (rawDelay as CollapseDelay)
     : COLLAPSE_DELAY_DEFAULT
 
+  const theme: ThemeMode =
+    input.theme === 'dark' || input.theme === 'system' || input.theme === 'light' ? input.theme : DEFAULT_SETTINGS.theme
+  const fontSize: FontScale =
+    input.fontSize === 'small' || input.fontSize === 'large' || input.fontSize === 'normal'
+      ? input.fontSize
+      : DEFAULT_SETTINGS.fontSize
+
   return {
     side,
     width,
     collapseDelay,
+    theme,
+    fontSize,
     alwaysOnTop: input.alwaysOnTop !== false,
     pinnedOpen: input.pinnedOpen === true,
     launchAtLogin: input.launchAtLogin === true

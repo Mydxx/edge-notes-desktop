@@ -207,6 +207,22 @@ async function main() {
   const rightSideState = await waitState(page, (state) => state.settings.side === 'right', 4000)
   record('设置弹层可切回右侧停靠', rightSideState.settings.side === 'right')
 
+  // 主题与字号：改完必须真的作用到渲染层
+  const fontBefore = await page.evaluate(`parseFloat(getComputedStyle(document.getElementById('note-editor')).fontSize)`)
+  await page.evaluate(`document.getElementById('theme-dark').click()`)
+  await waitFor(page, `document.documentElement.dataset.theme === 'dark'`, 3000, '切到深色主题')
+  record('可切换到深色主题', (await page.evaluate(`document.documentElement.dataset.theme`)) === 'dark')
+  await page.evaluate(`document.getElementById('theme-light').click()`)
+  await waitFor(page, `document.documentElement.dataset.theme === 'light'`, 3000, '切回浅色主题')
+  record('可切回浅色主题', (await page.evaluate(`document.documentElement.dataset.theme`)) === 'light')
+
+  await page.evaluate(`document.getElementById('font-large').click()`)
+  await waitFor(page, `document.documentElement.dataset.font === 'large'`, 3000, '切到大字号')
+  const fontAfter = await page.evaluate(`parseFloat(getComputedStyle(document.getElementById('note-editor')).fontSize)`)
+  record('字号档位真实生效', fontAfter > fontBefore + 0.5, `${fontBefore}px → ${fontAfter}px`)
+  await page.evaluate(`document.getElementById('font-normal').click()`)
+  await delay(200)
+
   const escapeKey = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
   await page.send('Input.dispatchKeyEvent', { type: 'keyDown', ...escapeKey })
   await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...escapeKey })

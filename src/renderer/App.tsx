@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import type { CollapseDelay, EdgeNotesState, LoginItemState, NoteStatus } from '../shared/api'
+import type { CollapseDelay, DataDirInfo, EdgeNotesState, LoginItemState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_OPTIONS } from '../shared/constants'
 
 const EMPTY_STATUS: NoteStatus = { state: 'idle', savedAt: null, message: null }
@@ -56,6 +56,8 @@ export default function App() {
   const [confirmingClear, setConfirmingClear] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [loginItem, setLoginItem] = useState<LoginItemState | null>(null)
+  const [dataDir, setDataDir] = useState<DataDirInfo | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
   const loadedRef = useRef(false)
   /** 拖动调宽时的锚点（面板贴边那一侧的屏幕坐标） */
@@ -147,6 +149,47 @@ export default function App() {
 
   // 托盘「设置…」会请求打开设置面板
   useEffect(() => window.edgeNotes.onOpenSettings(() => setSettingsOpen(true)), [])
+
+  // 主题：system 时跟随系统（Windows 深色模式会反映到 prefers-color-scheme）
+  const themeSetting = state?.settings.theme ?? 'light'
+  useEffect(() => {
+    const query = window.matchMedia('(prefers-color-scheme: dark)')
+    const apply = () => {
+      const resolved = themeSetting === 'system' ? (query.matches ? 'dark' : 'light') : themeSetting
+      document.documentElement.dataset.theme = resolved
+    }
+    apply()
+    if (themeSetting !== 'system') {
+      return
+    }
+    query.addEventListener('change', apply)
+    return () => query.removeEventListener('change', apply)
+  }, [themeSetting])
+
+  // 字号档位：只改正文
+  const fontSetting = state?.settings.fontSize ?? 'normal'
+  useEffect(() => {
+    document.documentElement.dataset.font = fontSetting
+  }, [fontSetting])
+
+  // 数据目录（只在打开设置时刷新，避免每次状态广播都读磁盘）
+  useEffect(() => {
+    if (!settingsOpen) {
+      return
+    }
+    let alive = true
+    window.edgeNotes
+      .getDataDir()
+      .then((info) => {
+        if (alive) {
+          setDataDir(info)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [settingsOpen])
 
   // 开机启动以系统回读为准，每次设置变化后刷新
   useEffect(() => {
@@ -256,6 +299,24 @@ export default function App() {
       setStatus(await window.edgeNotes.retrySave())
     } catch (reason) {
       setStatus({ state: 'error', savedAt: null, message: reason instanceof Error ? reason.message : String(reason) })
+    }
+  }, [])
+
+  const handleChangeDataDir = useCallback(async () => {
+    try {
+      const picked = await window.edgeNotes.pickDataDir()
+      if (!picked) {
+        return
+      }
+      const result = await window.edgeNotes.setDataDir(picked)
+      setNotice(`已迁移到 ${result.to}，正在重启…`)
+      setDataDir(await window.edgeNotes.getDataDir().catch(() => null))
+      // 迁移后必须立刻重启：否则用户继续输入会写进旧目录，新目录就成了旧快照
+      setTimeout(() => {
+        void window.edgeNotes.relaunch()
+      }, 1500)
+    } catch (reason) {
+      setSettingsError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [])
 
@@ -379,6 +440,36 @@ export default function App() {
           </div>
 
           <div className="settings__row">
+            <span className="settings__label">主题</span>
+            <span className="segmented">
+              <button id="theme-light" type="button" aria-pressed={settings.theme === 'light'} onClick={() => void applySettings(() => window.edgeNotes.setTheme('light'))}>
+                浅色
+              </button>
+              <button id="theme-dark" type="button" aria-pressed={settings.theme === 'dark'} onClick={() => void applySettings(() => window.edgeNotes.setTheme('dark'))}>
+                深色
+              </button>
+              <button id="theme-system" type="button" aria-pressed={settings.theme === 'system'} onClick={() => void applySettings(() => window.edgeNotes.setTheme('system'))}>
+                自动
+              </button>
+            </span>
+          </div>
+
+          <div className="settings__row">
+            <span className="settings__label">正文字号</span>
+            <span className="segmented">
+              <button id="font-small" type="button" aria-pressed={settings.fontSize === 'small'} onClick={() => void applySettings(() => window.edgeNotes.setFontSize('small'))}>
+                小
+              </button>
+              <button id="font-normal" type="button" aria-pressed={settings.fontSize === 'normal'} onClick={() => void applySettings(() => window.edgeNotes.setFontSize('normal'))}>
+                标准
+              </button>
+              <button id="font-large" type="button" aria-pressed={settings.fontSize === 'large'} onClick={() => void applySettings(() => window.edgeNotes.setFontSize('large'))}>
+                大
+              </button>
+            </span>
+          </div>
+
+          <div className="settings__row">
             <span className="settings__label">开机启动</span>
             <button
               id="toggle-launch-at-login"
@@ -394,6 +485,20 @@ export default function App() {
               {settings.launchAtLogin ? '已开启' : '已关闭'}
             </button>
           </div>
+
+          <div className="settings__row">
+            <span className="settings__label">数据目录</span>
+            <button id="change-data-dir" type="button" className="switchBtn" title="把笔记和设置迁移到其它目录（例如 D 盘）" onClick={() => void handleChangeDataDir()}>
+              更改…
+            </button>
+          </div>
+          {dataDir ? (
+            <p className="settings__path" title={dataDir.current}>
+              {dataDir.current}
+              {dataDir.isDefault ? '（默认）' : ''}
+            </p>
+          ) : null}
+          {notice ? <p className="settings__hint">{notice}</p> : null}
 
           <p className="settings__hint">拖动面板内侧边缘可调整宽度；Esc 关闭本面板。</p>
 

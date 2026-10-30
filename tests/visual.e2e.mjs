@@ -149,6 +149,22 @@ async function main() {
     await page.evaluate(`document.getElementById('open-settings').click()`)
     await delay(150)
 
+    // 5-2. 主题与字号
+    await page.evaluate(`window.edgeNotes.setTheme('dark')`)
+    await delay(350)
+    await shot('09-dark-350')
+    const darkApplied = await page.evaluate(`document.documentElement.dataset.theme`)
+    record('深色主题可切换并生效', darkApplied === 'dark', String(darkApplied))
+
+    await page.evaluate(`window.edgeNotes.setFontSize('large')`)
+    await delay(350)
+    await shot('10-dark-large-font')
+    const largeFont = await page.evaluate(`parseFloat(getComputedStyle(document.getElementById('note-editor')).fontSize)`)
+    record('大字号生效', largeFont >= 15.5, `${largeFont}px`)
+    await page.evaluate(`window.edgeNotes.setFontSize('normal')`)
+    await page.evaluate(`window.edgeNotes.setTheme('light')`)
+    await delay(300)
+
     // 6. 固定展开 + 置顶（两个状态都点亮）
     await page.evaluate('window.edgeNotes.setPinnedOpen(true)')
     await page.evaluate('window.edgeNotes.setAlwaysOnTop(true)')

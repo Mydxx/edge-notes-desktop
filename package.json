@@ -1,6 +1,6 @@
 {
   "name": "edge-notes-desktop",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "description": "Edge Notes Desktop - 桌面边缘笔记栏（原生窗口贴边滑出 + 本地笔记）",
   "main": "dist-electron/main/index.js",

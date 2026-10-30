@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/api'
-import type { EdgeNotesApi, EdgeNotesState, LoginItemState, NoteSnapshot, NoteStatus } from '../shared/api'
+import type {
+  DataDirInfo,
+  EdgeNotesApi,
+  EdgeNotesState,
+  LoginItemState,
+  MigrationResult,
+  NoteSnapshot,
+  NoteStatus
+} from '../shared/api'
 
 /** 渲染进程唯一可用的能力面：受限 IPC，不暴露 Node.js 或任意系统 API */
 const api: EdgeNotesApi = {
@@ -14,9 +22,15 @@ const api: EdgeNotesApi = {
     ipcRenderer.send(IPC_CHANNELS.setResizing, value)
   },
   setHidden: (hidden: boolean) => ipcRenderer.invoke(IPC_CHANNELS.setHidden, hidden) as Promise<EdgeNotesState>,
+  setTheme: (theme) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, theme) as Promise<EdgeNotesState>,
+  setFontSize: (scale) => ipcRenderer.invoke(IPC_CHANNELS.setFontSize, scale) as Promise<EdgeNotesState>,
   getLoginItemState: () => ipcRenderer.invoke(IPC_CHANNELS.getLoginItem) as Promise<LoginItemState>,
   setLaunchAtLogin: (enabled: boolean) =>
     ipcRenderer.invoke(IPC_CHANNELS.setLaunchAtLogin, enabled) as Promise<EdgeNotesState>,
+  getDataDir: () => ipcRenderer.invoke(IPC_CHANNELS.getDataDir) as Promise<DataDirInfo>,
+  pickDataDir: () => ipcRenderer.invoke(IPC_CHANNELS.pickDataDir) as Promise<string | null>,
+  setDataDir: (dir: string) => ipcRenderer.invoke(IPC_CHANNELS.setDataDir, dir) as Promise<MigrationResult>,
+  relaunch: () => ipcRenderer.invoke(IPC_CHANNELS.relaunch) as Promise<void>,
   quit: () => ipcRenderer.invoke(IPC_CHANNELS.quit) as Promise<void>,
 
   getNote: () => ipcRenderer.invoke(IPC_CHANNELS.noteGet) as Promise<NoteSnapshot>,
