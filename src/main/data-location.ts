@@ -1,5 +1,6 @@
 import { app } from 'electron'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { log } from './log'
 
@@ -11,29 +12,61 @@ const LEGACY_NOTE_FILE = 'edge-notes-note.txt'
 const ATTACHMENT_DIR = 'attachments'
 const POINTER_FILE = 'data-location.json'
 
+const FS_REASON: Record<string, string> = {
+  ENOSPC: '磁盘空间不足',
+  EACCES: '没有写入权限',
+  EPERM: '没有写入权限',
+  EEXIST: '目标已存在',
+  ENOTDIR: '目标路径不可用',
+  EISDIR: '目标路径被占用',
+  ENOENT: '路径不存在',
+  EBUSY: '文件正被占用'
+}
+
+function describeFsError(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException)?.code
+  if (!code) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  return `${FS_REASON[code] ?? '文件操作失败'}（${code}）`
+}
+
+function sha256(filePath: string): string {
+  return createHash('sha256').update(readFileSync(filePath)).digest('hex')
+}
+
+/** 复制单个文件并做 SHA-256 一致性校验；不一致就删掉目标文件并抛错 */
+function copyVerified(src: string, dest: string): void {
+  copyFileSync(src, dest)
+  if (sha256(src) !== sha256(dest)) {
+    rmSync(dest, { force: true })
+    throw new Error(`文件内容校验失败（SHA-256 不一致）：${path.basename(src)}`)
+  }
+}
+
 /**
  * 复制附件目录（只处理一层，与附件协议的白名单保持一致）。
- * 返回复制的文件数，便于校验"是不是真的搬过去了"。
+ * 返回复制的文件数；每个文件都做 SHA-256 校验，并核对文件数量。
+ * `written` 用于失败回滚，避免在目标目录留下半套数据。
  */
-function copyAttachments(from: string, to: string): number {
+function copyAttachments(from: string, to: string, written: string[]): number {
   const source = path.join(from, ATTACHMENT_DIR)
   if (!existsSync(source)) {
     return 0
   }
   const target = path.join(to, ATTACHMENT_DIR)
   mkdirSync(target, { recursive: true })
+  const entries = readdirSync(source, { withFileTypes: true }).filter((entry) => entry.isFile())
   let copied = 0
-  for (const entry of readdirSync(source, { withFileTypes: true })) {
-    if (!entry.isFile()) {
-      continue
-    }
+  for (const entry of entries) {
     const src = path.join(source, entry.name)
     const dest = path.join(target, entry.name)
-    copyFileSync(src, dest)
-    if (statSync(src).size !== statSync(dest).size) {
-      throw new Error(`附件迁移校验失败：${entry.name}`)
-    }
+    copyVerified(src, dest)
+    written.push(dest)
     copied += 1
+  }
+  if (copied !== entries.length) {
+    throw new Error(`附件数量校验失败：应有 ${entries.length} 个，实际复制 ${copied} 个`)
   }
   return copied
 }
@@ -114,16 +147,19 @@ export function resolveUserDataDir(): void {
     mkdirSync(dir, { recursive: true })
     // 之前的数据可能已经在系统默认目录里：先搬过去，别让人以为笔记丢了
     const previous = app.getPath('userData')
+    const written: string[] = []
     let migrated = 0
     for (const name of [SETTINGS_FILE, NOTE_FILE, LEGACY_NOTE_FILE]) {
       const src = path.join(previous, name)
-      if (existsSync(src) && !existsSync(path.join(dir, name))) {
-        copyFileSync(src, path.join(dir, name))
+      const dest = path.join(dir, name)
+      if (existsSync(src) && !existsSync(dest)) {
+        copyVerified(src, dest)
+        written.push(dest)
         migrated += 1
       }
     }
     // 图片必须跟着笔记一起搬，否则正文里的 attachments/… 会全部失效
-    migrated += copyAttachments(previous, dir)
+    migrated += copyAttachments(previous, dir, written)
     mkdirSync(path.dirname(pointerPath()), { recursive: true })
     writeFileSync(pointerPath(), `${JSON.stringify({ dataDir: dir }, null, 2)}\n`, 'utf8')
     app.setPath('userData', dir)
@@ -187,23 +223,34 @@ export function migrateDataDir(target: string): MigrationResult {
   }
 
   const copied: string[] = []
-  for (const name of [SETTINGS_FILE, NOTE_FILE, LEGACY_NOTE_FILE]) {
-    const src = path.join(from, name)
-    if (!existsSync(src)) {
-      continue
+  /** 已写入目标目录的文件，失败时逐个回滚，目标目录不会留下半套数据 */
+  const written: string[] = []
+
+  try {
+    for (const name of [SETTINGS_FILE, NOTE_FILE, LEGACY_NOTE_FILE]) {
+      const src = path.join(from, name)
+      if (!existsSync(src)) {
+        continue
+      }
+      const dest = path.join(to, name)
+      copyVerified(src, dest)
+      written.push(dest)
+      copied.push(name)
     }
-    const dest = path.join(to, name)
-    copyFileSync(src, dest)
-    if (statSync(src).size !== statSync(dest).size) {
-      throw new Error(`迁移校验失败：${name} 大小不一致`)
+
+    const attachmentCount = copyAttachments(from, to, written)
+
+    // 指针最后写：只有数据确认到位才切换，失败时仍使用原目录
+    mkdirSync(path.dirname(pointerPath()), { recursive: true })
+    writeFileSync(pointerPath(), `${JSON.stringify({ dataDir: to }, null, 2)}\n`, 'utf8')
+    log('data-dir-migrated', { from, to, copied, attachments: attachmentCount })
+    return { from, to, copied, requiresRestart: true }
+  } catch (error) {
+    for (const file of written.reverse()) {
+      rmSync(file, { force: true })
     }
-    copied.push(name)
+    const message = describeFsError(error)
+    log('data-dir-migrate-failed', { from, to, message })
+    throw new Error(`数据迁移失败：${message}；原始数据未改动`)
   }
-
-  const attachmentCount = copyAttachments(from, to)
-
-  mkdirSync(path.dirname(pointerPath()), { recursive: true })
-  writeFileSync(pointerPath(), `${JSON.stringify({ dataDir: to }, null, 2)}\n`, 'utf8')
-  log('data-dir-migrated', { from, to, copied, attachments: attachmentCount })
-  return { from, to, copied, requiresRestart: true }
 }

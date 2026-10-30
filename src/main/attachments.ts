@@ -1,6 +1,8 @@
 import { randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import { shell } from 'electron'
 import path from 'node:path'
+import type { AttachmentFile } from '../shared/api'
 import { log } from './log'
 
 /** 附件目录名，同时是 Markdown 里的相对路径前缀 */
@@ -73,6 +75,54 @@ export function resolveAttachmentUrl(userDataDir: string, requestUrl: string): s
     return null
   }
   return path.join(attachmentsDir(userDataDir), name)
+}
+
+/** 列出附件目录下的文件（只认附件协议允许的文件名） */
+export function listAttachments(userDataDir: string): AttachmentFile[] {
+  const dir = attachmentsDir(userDataDir)
+  if (!existsSync(dir)) {
+    return []
+  }
+  const files: AttachmentFile[] = []
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (!entry.isFile() || !/^[A-Za-z0-9._-]+$/.test(entry.name)) {
+      continue
+    }
+    files.push({
+      relative: `${ATTACHMENT_DIR}/${entry.name}`,
+      name: entry.name,
+      bytes: statSync(path.join(dir, entry.name)).size
+    })
+  }
+  return files
+}
+
+/**
+ * 把指定附件移入回收站（可还原），而不是直接删除。
+ * 调用方必须已经让用户确认，并且只传"当前正文没有引用"的文件。
+ */
+export async function trashAttachments(
+  userDataDir: string,
+  relatives: string[]
+): Promise<{ trashed: number; failed: string[] }> {
+  const failed: string[] = []
+  let trashed = 0
+  for (const relative of relatives) {
+    const target = resolveAttachmentUrl(userDataDir, `edgenote-media://local/${relative}`)
+    if (!target || !existsSync(target)) {
+      failed.push(relative)
+      continue
+    }
+    try {
+      await shell.trashItem(target)
+      trashed += 1
+    } catch (error) {
+      log('attachment-trash-failed', { relative, message: error instanceof Error ? error.message : String(error) })
+      failed.push(relative)
+    }
+  }
+  log('attachments-trashed', { trashed, failed: failed.length })
+  return { trashed, failed }
 }
 
 /** 判断 Markdown 里的相对路径在附件目录中是否真的存在 */

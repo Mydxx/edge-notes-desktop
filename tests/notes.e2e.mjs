@@ -284,6 +284,25 @@ async function main() {
   await page.captureScreenshot(path.join(shotsDir, '06-image-preview.png'))
   ps('clipboard-restore', '-TextFile', clipboardBackup)
 
+  // 点击图片放大；Esc 关闭
+  const escKey = { key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27, nativeVirtualKeyCode: 27 }
+  await page.evaluate(`document.querySelector('#note-preview img').click()`)
+  await waitFor(page, `document.querySelector('.lightbox') !== null`, 3000, '图片放大')
+  const lightboxInfo = await page.evaluate(`(() => {
+    const box = document.querySelector('.lightbox')
+    const img = box?.querySelector('img')
+    return { src: img?.getAttribute('src') ?? '', width: img?.naturalWidth ?? 0 }
+  })()`)
+  record(
+    '点击预览图片可放大查看',
+    String(lightboxInfo.src).startsWith('edgenote-media://') && lightboxInfo.width > 0,
+    JSON.stringify(lightboxInfo)
+  )
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', ...escKey })
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...escKey })
+  await waitFor(page, `document.querySelector('.lightbox') === null`, 3000, 'Esc 关闭放大图')
+  record('Esc 可关闭放大图', (await page.evaluate(`document.querySelector('.lightbox') === null`)) === true)
+
   // 自定义协议只允许附件目录下的单层文件，任何 ../ 必须被拒绝
   const traversalFrom = readLog(logFile).length
   const traversalResult = await page.evaluate(`new Promise((resolve) => {
@@ -314,6 +333,37 @@ async function main() {
   }))()`)
   record('外链图片被阻止加载', remoteInfo.blocked >= 1 && remoteInfo.remoteImgs === 0, JSON.stringify(remoteInfo))
   await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await delay(200)
+
+  // 清理未被引用的附件：先展示数量与体积，取消不删，确认后移入回收站
+  const orphanPath = path.join(userDataDir, 'attachments', 'orphan-test.png')
+  writeFileSync(orphanPath, Buffer.from('89504e470d0a1a0a', 'hex'))
+  await page.evaluate(`document.getElementById('open-settings').click()`)
+  await waitFor(page, `document.getElementById('prune-attachments') !== null`, 3000, '设置里有清理入口')
+  await page.evaluate(`document.getElementById('prune-attachments').click()`)
+  await waitFor(page, `document.getElementById('prune-confirm') !== null`, 5000, '清理确认条')
+  const pruneText = await page.evaluate(`document.querySelector('.confirm__text')?.textContent ?? ''`)
+  record(
+    '清理前展示待清理数量与文件大小',
+    pruneText.includes('1 个') && /B|KB|MB/.test(pruneText),
+    pruneText.trim().slice(0, 60)
+  )
+
+  await page.evaluate(`document.getElementById('prune-cancel').click()`)
+  await delay(300)
+  record('取消清理后附件仍然存在', existsSync(orphanPath))
+
+  await page.evaluate(`document.getElementById('prune-attachments').click()`)
+  await waitFor(page, `document.getElementById('prune-confirm') !== null`, 5000, '再次打开清理确认')
+  await page.evaluate(`document.getElementById('prune-confirm').click()`)
+  await waitFor(page, `document.getElementById('prune-confirm') === null`, 6000, '清理完成')
+  await delay(800)
+  record(
+    '确认后只移走未被引用的图片',
+    !existsSync(orphanPath) && existsSync(attachmentPath),
+    `orphan=${existsSync(orphanPath)} referenced=${existsSync(attachmentPath)}`
+  )
+  await page.evaluate(`document.getElementById('open-settings').click()`)
   await delay(200)
 
   // Ctrl+E 双向切换；视图模式要持久化到设置里

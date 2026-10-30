@@ -1,5 +1,6 @@
 // 第 06 轮：Windows 桌面集成验证（系统托盘 / 隐藏与退出 / 开机启动 / 二次启动唤出）
 // 用法：npm run build && node tests/desktop.e2e.mjs
+import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
@@ -116,30 +117,33 @@ async function main() {
     await page.captureScreenshot(path.join(shotsDir, '01-restored.png'))
 
     // ------------------------------------------------------ 四、开机启动
+    // 未打包时 Windows 启动项不可用（实测 Electron 回读与注册表不一致），应用必须如实报告"不支持"
     const loginBefore = await page.evaluate('window.edgeNotes.getLoginItemState()')
-    record('能读到开机启动真实状态', typeof loginBefore.enabled === 'boolean', JSON.stringify(loginBefore))
-    let loginApplied = null
+    record(
+      '未打包时明确报告开机启动不可用',
+      loginBefore.supported === false && typeof loginBefore.enabled === 'boolean' && typeof loginBefore.active === 'boolean',
+      JSON.stringify(loginBefore)
+    )
+    record(
+      '不可用时给出可读原因（不伪造成功）',
+      typeof loginBefore.message === 'string' && /开发模式|打包/.test(loginBefore.message),
+      String(loginBefore.message)
+    )
+
     let loginError = null
     try {
       await page.evaluate('window.edgeNotes.setLaunchAtLogin(true)')
-      loginApplied = await page.evaluate('window.edgeNotes.getLoginItemState()')
-      const stateAfter = await page.evaluate('window.edgeNotes.getState()')
-      record('开启开机启动后系统回读为已启用', loginApplied.enabled === true, JSON.stringify(loginApplied))
-      record('设置文件里的 launchAtLogin 与实际一致', stateAfter.settings.launchAtLogin === true)
     } catch (error) {
       loginError = error instanceof Error ? error.message : String(error)
     }
-    if (loginError) {
-      record('开机启动失败时明确报错（不伪造成功）', loginError.length > 0, loginError)
-    }
-    // 无论成功失败都恢复为关闭，避免给用户留下启动项
-    try {
-      await page.evaluate('window.edgeNotes.setLaunchAtLogin(false)')
-      const loginOff = await page.evaluate('window.edgeNotes.getLoginItemState()')
-      record('关闭开机启动后系统回读为未启用', loginOff.enabled === false, JSON.stringify(loginOff))
-    } catch (error) {
-      record('关闭开机启动失败时明确报错', error instanceof Error, error instanceof Error ? error.message : String(error))
-    }
+    record('尝试开启会被拒绝并说明原因', loginError !== null && /开发模式|打包/.test(loginError), String(loginError).slice(0, 60))
+
+    const afterLoginAttempt = await page.evaluate('window.edgeNotes.getState()')
+    record(
+      '被拒绝后不会留下假的"已开启"',
+      afterLoginAttempt.settings.launchAtLogin === false,
+      String(afterLoginAttempt.settings.launchAtLogin)
+    )
 
     // --------------------------------------- 五、二次启动唤出（含隐藏态）
     await page.evaluate('window.edgeNotes.setHidden(true)')
@@ -219,6 +223,20 @@ async function main() {
         existsSync(migratedAttachment) && readFileSync(migratedAttachment).length === 8,
         migratedAttachment
       )
+      // 逐文件 SHA-256 比对：内容必须完全一致，而不只是"大小差不多"
+      const sha = (filePath) => createHash('sha256').update(readFileSync(filePath)).digest('hex')
+      const pairs = [
+        ['edge-notes-note.md'],
+        ['edge-notes-settings.json'],
+        [path.join('attachments', 'probe.png')]
+      ]
+      const hashesOk = pairs.every(([relative]) => {
+        const src = path.join(userDataDir, relative)
+        const dest = path.join(migrateTarget, relative)
+        return existsSync(src) && existsSync(dest) && sha(src) === sha(dest)
+      })
+      record('迁移后逐文件 SHA-256 一致', hashesOk, `${pairs.length} 个文件`)
+
       const pointerRaw = existsSync(pointerFile) ? JSON.parse(readFileSync(pointerFile, 'utf8')) : null
       record('迁移后写入指针文件（指向新目录）', pointerRaw?.dataDir === migrateTarget, JSON.stringify(pointerRaw))
       record('迁移结果要求重启生效', migrated.requiresRestart === true)
@@ -231,6 +249,28 @@ async function main() {
         duplicateError = error instanceof Error ? error.message : String(error)
       }
       record('目标目录已有数据时拒绝覆盖', duplicateError !== null && duplicateError.length > 0, String(duplicateError).slice(0, 60))
+
+      // 目标是一个文件而不是目录：迁移必须失败，且原数据与指针都不能被动过
+      const badTarget = path.join(artifactsDir, 'desktop-not-a-dir.txt')
+      writeFileSync(badTarget, 'not a directory', 'utf8')
+      const noteBefore = readFileSync(path.join(userDataDir, 'edge-notes-note.md'), 'utf8')
+      let invalidTargetError = null
+      try {
+        await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(badTarget)})`)
+      } catch (error) {
+        invalidTargetError = error instanceof Error ? error.message : String(error)
+      }
+      record(
+        '目标路径非法时迁移失败并说明原因',
+        invalidTargetError !== null && /迁移失败|路径|目录/.test(invalidTargetError),
+        String(invalidTargetError).slice(0, 70)
+      )
+      record(
+        '迁移失败不破坏原数据与指针',
+        readFileSync(path.join(userDataDir, 'edge-notes-note.md'), 'utf8') === noteBefore &&
+          (existsSync(pointerFile) ? JSON.parse(readFileSync(pointerFile, 'utf8')).dataDir : null) === migrateTarget,
+        `note=${noteBefore.length} 字`
+      )
 
       quitApp(page2)
       await waitChildExit(app2, 10000)

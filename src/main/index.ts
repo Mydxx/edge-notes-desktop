@@ -5,7 +5,14 @@ import path from 'node:path'
 import { IPC_CHANNELS } from '../shared/api'
 import type { DockPhase, DockSide, EdgeNotesSettings, EdgeNotesState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
-import { attachmentExists, mimeForAttachment, resolveAttachmentUrl, saveAttachment } from './attachments'
+import {
+  attachmentExists,
+  listAttachments,
+  mimeForAttachment,
+  resolveAttachmentUrl,
+  saveAttachment,
+  trashAttachments
+} from './attachments'
 import { getDataDirInfo, migrateDataDir, resolveUserDataDir } from './data-location'
 import { EdgeDock } from './edge-dock'
 import { applyLoginItem, readLoginItem, reconcileLoginItem } from './login-item'
@@ -428,6 +435,19 @@ function registerIpc(): void {
     return paths.filter((item): item is string => typeof item === 'string' && !attachmentExists(dir, item))
   })
 
+  ipcMain.handle(IPC_CHANNELS.listAttachments, (event) => {
+    requireSender(event)
+    return listAttachments(app.getPath('userData'))
+  })
+
+  ipcMain.handle(IPC_CHANNELS.trashAttachments, async (event, relatives: unknown) => {
+    requireSender(event)
+    if (!Array.isArray(relatives) || relatives.some((item) => typeof item !== 'string')) {
+      throw new TypeError('attachment list must be an array of strings')
+    }
+    return trashAttachments(app.getPath('userData'), relatives as string[])
+  })
+
   ipcMain.on(IPC_CHANNELS.editorFocus, (event, value: unknown) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) {
       return
@@ -483,11 +503,16 @@ async function bootstrap(): Promise<void> {
     dock?.start()
   })
 
-  // 开机启动以系统实际状态为准：用户可能在 Windows"启动应用"里关掉过
+  // 开机启动以系统实际状态为准：用户可能在 Windows"启动应用"里关掉过。
+  // 未打包时该能力不可用，顺手把历史遗留的 true 清掉，避免界面显示"已开启"却没有启动项。
   if (store) {
     const actual = reconcileLoginItem(store.get().launchAtLogin)
     if (actual !== store.get().launchAtLogin) {
       applySettings({ launchAtLogin: actual })
+    }
+    if (!app.isPackaged && store.get().launchAtLogin) {
+      log('login-item-reset-dev', {})
+      applySettings({ launchAtLogin: false })
     }
   }
 

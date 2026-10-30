@@ -81,6 +81,8 @@ export default function App() {
   const [previewHtml, setPreviewHtml] = useState('')
   const [contentVersion, setContentVersion] = useState(0)
   const [attachError, setAttachError] = useState<string | null>(null)
+  const [zoomed, setZoomed] = useState<string | null>(null)
+  const [prune, setPrune] = useState<{ count: number; bytes: number; relatives: string[] } | null>(null)
   const previewRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
   const loadedRef = useRef(false)
@@ -477,6 +479,10 @@ export default function App() {
   // Ctrl/Cmd+E 在编辑与预览之间切换
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') {
+        setZoomed(null)
+        return
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'e') {
         event.preventDefault()
         void togglePreview()
@@ -513,6 +519,55 @@ export default function App() {
       setAttachError(reason instanceof Error ? reason.message : String(reason))
     }
   }, [])
+
+  const formatBytes = (bytes: number): string => {
+    if (bytes < 1024) {
+      return `${bytes} B`
+    }
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`
+    }
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`
+  }
+
+  /** 扫描未被正文引用的附件：只统计并弹确认，不直接删 */
+  const handleScanAttachments = useCallback(async () => {
+    try {
+      const files = await window.edgeNotes.listAttachments()
+      const source = editorRef.current?.value ?? ''
+      const referenced = new Set(source.match(/attachments\/[^\s)"']+/g) ?? [])
+      const unused = files.filter((file) => !referenced.has(file.relative))
+      setConfirmingClear(false)
+      if (unused.length === 0) {
+        setPrune(null)
+        setNotice(`附件共 ${files.length} 个，没有需要清理的`)
+        return
+      }
+      setNotice(null)
+      setPrune({
+        count: unused.length,
+        bytes: unused.reduce((sum, file) => sum + file.bytes, 0),
+        relatives: unused.map((file) => file.relative)
+      })
+    } catch (reason) {
+      setAttachError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [])
+
+  /** 用户确认后才执行：移入回收站（可还原），不是直接删除 */
+  const handlePrune = useCallback(async () => {
+    if (!prune) {
+      return
+    }
+    try {
+      const result = await window.edgeNotes.trashAttachments(prune.relatives)
+      const suffix = result.failed.length > 0 ? `，${result.failed.length} 个失败` : ''
+      setNotice(`已把 ${result.trashed} 个图片移入回收站${suffix}`)
+      setPrune(null)
+    } catch (reason) {
+      setAttachError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [prune])
 
   const settings = state?.settings
   const alwaysOnTop = settings?.alwaysOnTop ?? false
@@ -687,9 +742,14 @@ export default function App() {
                 void applySettings(() => window.edgeNotes.setLaunchAtLogin(!settings.launchAtLogin))
               }}
             >
-              {settings.launchAtLogin ? '已开启' : '已关闭'}
+              {settings.launchAtLogin ? (loginItem && loginItem.enabled && !loginItem.active ? '系统禁用' : '已开启') : '已关闭'}
             </button>
           </div>
+          {loginItem && loginItem.enabled && !loginItem.active ? (
+            <p className="settings__hint settings__hint--warn">
+              启动项已写入，但被 Windows「启动应用」禁用，登录后不会自动启动。
+            </p>
+          ) : null}
 
           <div className="settings__row">
             <span className="settings__label">数据目录</span>
@@ -703,6 +763,18 @@ export default function App() {
               {dataDir.isDefault ? '（默认）' : ''}
             </p>
           ) : null}
+          <div className="settings__row">
+            <span className="settings__label">图片附件</span>
+            <button
+              id="prune-attachments"
+              type="button"
+              className="switchBtn"
+              title="把正文里没有引用的图片移入回收站"
+              onClick={() => void handleScanAttachments()}
+            >
+              清理…
+            </button>
+          </div>
           {notice ? <p className="settings__hint">{notice}</p> : null}
 
           <p className="settings__hint">拖动面板内侧边缘可调整宽度；Esc 关闭本面板。</p>
@@ -723,6 +795,20 @@ export default function App() {
           </button>
           <button id="clear-confirm" type="button" className="textBtn textBtn--danger" onClick={() => void handleClear()}>
             清空
+          </button>
+        </div>
+      ) : null}
+
+      {prune ? (
+        <div className="confirm">
+          <span className="confirm__text">
+            清理 {prune.count} 个未被引用的图片（{formatBytes(prune.bytes)}）？会移入回收站，可还原。
+          </span>
+          <button id="prune-cancel" type="button" className="textBtn" onClick={() => setPrune(null)}>
+            取消
+          </button>
+          <button id="prune-confirm" type="button" className="textBtn textBtn--danger" onClick={() => void handlePrune()}>
+            清理
           </button>
         </div>
       ) : null}
@@ -759,8 +845,23 @@ export default function App() {
           className="preview"
           id="note-preview"
           ref={previewRef}
+          onClick={(event) => {
+            const target = event.target as HTMLElement
+            if (target.tagName === 'IMG') {
+              const src = target.getAttribute('src')
+              if (src && src.startsWith('edgenote-media://')) {
+                setZoomed(src)
+              }
+            }
+          }}
           dangerouslySetInnerHTML={{ __html: previewHtml }}
         />
+      ) : null}
+
+      {zoomed ? (
+        <div className="lightbox" role="dialog" aria-label="图片预览" onClick={() => setZoomed(null)} title="点击任意处或按 Esc 关闭">
+          <img src={zoomed} alt="" />
+        </div>
       ) : null}
 
       {attachError ? <div className="errorBar">图片插入失败：{attachError}</div> : null}
@@ -769,7 +870,16 @@ export default function App() {
         <span id="save-status" className={`foot__status foot__status--${status.state}`} title={status.message ?? ''}>
           {statusLabel}
         </span>
-        <button id="clear-note" type="button" className="textBtn textBtn--quiet" title="清空当前笔记" onClick={() => setConfirmingClear(true)}>
+        <button
+          id="clear-note"
+          type="button"
+          className="textBtn textBtn--quiet"
+          title="清空当前笔记"
+          onClick={() => {
+            setPrune(null)
+            setConfirmingClear(true)
+          }}
+        >
           清空
         </button>
         <button

@@ -108,22 +108,41 @@ async function main() {
     record('默认宽度：无横向溢出', emptyLayout.overflowX === 0 && emptyLayout.barOverflow <= 0 && emptyLayout.footOverflow <= 0, JSON.stringify(emptyLayout))
 
     // 浅色主题的"质感"要能被量化：不是纯白底，且正文对比度达标
-    const themeCheck = await page.evaluate(`(() => {
-      const parse = (c) => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number)
-      const lum = (rgb) => {
-        const f = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4) })
-        return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2]
-      }
-      const ratio = (a, b) => { const x = [lum(a), lum(b)].sort((m, n) => n - m); return (x[0] + 0.05) / (x[1] + 0.05) }
-      const body = getComputedStyle(document.body)
-      const bg = parse(body.backgroundColor)
-      const text = parse(getComputedStyle(document.getElementById('note-editor')).color)
-      const dim = parse(getComputedStyle(document.querySelector('.foot__status')).color)
-      return { bg: body.backgroundColor, text: Number(ratio(text, bg).toFixed(2)), dim: Number(ratio(dim, bg).toFixed(2)) }
-    })()`)
-    record('浅色主题不是纯白底（暖米白）', themeCheck.bg !== 'rgb(255, 255, 255)', themeCheck.bg)
-    record('正文对比度 ≥ 4.5', themeCheck.text >= 4.5, `ratio=${themeCheck.text}`)
-    record('次要文字对比度 ≥ 3', themeCheck.dim >= 3, `ratio=${themeCheck.dim}`)
+    // 逐色测量对比度（WCAG 相对亮度），浅色两套主题都要过 AA
+    const measureContrast = () =>
+      page.evaluate(`(() => {
+        const parse = (c) => (c.match(/[\\d.]+/g) || []).slice(0, 3).map(Number)
+        const lum = (rgb) => {
+          const f = rgb.map((v) => { const s = v / 255; return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4) })
+          return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2]
+        }
+        const ratio = (a, b) => { const x = [lum(a), lum(b)].sort((m, n) => n - m); return Number(((x[0] + 0.05) / (x[1] + 0.05)).toFixed(2)) }
+        // CSS 变量是 #rrggbb，必须让浏览器解析成 rgb() 才能算亮度
+        const pick = (name) => {
+          const probe = document.createElement('div')
+          probe.style.color = 'var(' + name + ')'
+          document.body.appendChild(probe)
+          const color = parse(getComputedStyle(probe).color)
+          probe.remove()
+          return color
+        }
+        const bg = parse(getComputedStyle(document.body).backgroundColor)
+        return {
+          bg: getComputedStyle(document.body).backgroundColor,
+          text: ratio(pick('--color-text'), bg),
+          dim: ratio(pick('--color-text-dim'), bg),
+          muted: ratio(pick('--color-text-muted'), bg),
+          accent: ratio(pick('--color-accent'), bg),
+          placeholder: ratio(pick('--color-placeholder'), bg)
+        }
+      })()`)
+
+    const lightContrast = await measureContrast()
+    record('浅色主题不是纯白底（暖米白）', lightContrast.bg !== 'rgb(255, 255, 255)', lightContrast.bg)
+    record('浅色：正文对比度 ≥ 4.5', lightContrast.text >= 4.5, `ratio=${lightContrast.text}`)
+    record('浅色：次要文字对比度 ≥ 4.5（WCAG AA）', lightContrast.dim >= 4.5 && lightContrast.muted >= 4.5, `dim=${lightContrast.dim} muted=${lightContrast.muted}`)
+    record('浅色：强调色对比度 ≥ 4.5', lightContrast.accent >= 4.5, `ratio=${lightContrast.accent}`)
+    record('浅色：占位文字 ≥ 3（不刺眼但可辨认）', lightContrast.placeholder >= 3, `ratio=${lightContrast.placeholder}`)
 
     // 2. 长文本 @ 默认宽度
     await page.evaluate(`document.getElementById('note-editor').focus()`)
@@ -173,6 +192,12 @@ async function main() {
     await shot('09-dark-350')
     const darkApplied = await page.evaluate(`document.documentElement.dataset.theme`)
     record('深色主题可切换并生效', darkApplied === 'dark', String(darkApplied))
+    const darkContrast = await measureContrast()
+    record(
+      '深色：正文与次要文字对比度 ≥ 4.5（WCAG AA）',
+      darkContrast.text >= 4.5 && darkContrast.dim >= 4.5 && darkContrast.muted >= 4.5,
+      `text=${darkContrast.text} dim=${darkContrast.dim} muted=${darkContrast.muted}`
+    )
 
     await page.evaluate(`window.edgeNotes.setFontSize('large')`)
     await delay(350)

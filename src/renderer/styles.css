@@ -12,7 +12,8 @@
   --color-border-strong: #d2c7b4;
   --color-text: #2b2721;
   --color-text-dim: #6b6153;
-  --color-text-muted: #8b8272;
+  /* 次要文字也要过 WCAG AA：实测对比度 4.7:1（改前 #8b8272 只有 3.4:1） */
+  --color-text-muted: #75695a;
   --color-accent: #526d8a;
   --color-accent-soft: rgba(82, 109, 138, 0.1);
   --color-accent-soft-strong: rgba(82, 109, 138, 0.2);
@@ -26,7 +27,7 @@
   --color-warn: #8a6a2a;
   --color-hover: rgba(43, 39, 33, 0.055);
   --color-btn-hover: #e0d7c7;
-  --color-placeholder: #b3a996;
+  --color-placeholder: #8f8471;
   --color-scroll-thumb: #d9cfbe;
   --color-scroll-thumb-hover: #c8bba6;
   --shadow-popover: 0 10px 26px rgba(60, 50, 35, 0.14);
@@ -76,7 +77,8 @@
   --color-border-strong: #313a4b;
   --color-text: #e7eaf1;
   --color-text-dim: #98a1b3;
-  --color-text-muted: #6d768a;
+  /* 深色下次要文字同样提到 4.5:1（改前 #6d768a 为 3.3:1） */
+  --color-text-muted: #8a93a5;
   --color-accent: #3b82f6;
   --color-accent-soft: rgba(59, 130, 246, 0.16);
   --color-accent-soft-strong: rgba(59, 130, 246, 0.24);
@@ -377,6 +379,11 @@ body {
   text-align: left;
 }
 
+.settings__hint--warn {
+  color: var(--color-danger-text);
+  margin-top: 0;
+}
+
 .settings__footer {
   display: flex;
   justify-content: flex-end;
@@ -647,9 +654,32 @@ body {
   cursor: default;
 }
 
+.preview img {
+  cursor: zoom-in;
+}
+
 .preview__blocked {
   color: var(--color-text-muted);
   font-size: 0.92em;
+}
+
+/* 图片放大：整窗遮罩，点击任意处或 Esc 关闭 */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: var(--space-6);
+  background: rgba(24, 20, 14, 0.74);
+  cursor: zoom-out;
+}
+
+.lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.35);
 }
 
 .preview::-webkit-scrollbar {

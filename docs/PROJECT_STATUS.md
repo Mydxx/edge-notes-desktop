@@ -266,6 +266,34 @@
 1. **开机启动写不进注册表**：`setLoginItemSettings` 只写 `Run` 项时，如果该应用在 Windows「启动应用」里被标记过，系统按"未启用"处理，回读 `openAtLogin=false`——测试正确地报了失败。修法是同时传 `enabled`（改写 StartupApproved 启用位）。
 2. **像素级触发条判定再次因为换色失效**：探测器写死了"蓝色主导"，这次强调色降饱和后 `B-R` 不足阈值。这说明**用颜色识别自家控件本身就是错的**——已把左右两侧都改为按 `bounds` 硬断言（可见宽度 = 4 DIP），像素值只作为 `console.log` 参考。
 
+## 五-8、最后一轮质量优化
+
+五项针对性优化，均以"先查现状、只改真问题"为前提。
+
+| 项 | 改前 | 改后 | 验证 |
+|---|---|---|---|
+| 文字可读性 | 次要文字 3.4:1（不达 AA）；占位文字 2.2:1 | 浅色 muted `#8b8272`→`#75695a`（5.5:1 实测）、占位 `#8f8471`；深色 muted 3.3:1→5.9:1 | `test:visual` 用 WCAG 相对亮度**逐色计算**：浅色 text 13.42 / dim 5.49 / muted 4.84 / accent 4.85；深色 text 15.17 / dim 7.03 / muted 5.91 |
+| 附件清理 | 无 | 设置里「图片附件 → 清理…」：统计未被正文引用的文件数量与体积 → 确认 → `shell.trashItem` **移入回收站**；取消不动 | 断言：展示"1 个（8 B）"、取消后文件仍在、确认后只移走未引用的、被引用的保留 |
+| 迁移完整性 | 只比文件大小 | **SHA-256 逐文件比对 + 文件数量核对**；失败回滚已写入文件、不写指针；错误按 ENOENT/ENOSPC/EACCES 等翻译 | 断言：3 个文件哈希全一致；目标路径非法 → 迁移失败且原笔记与指针未被改动 |
+| 开机启动 | 回读 `openAtLogin`，开发模式下时真时假 | 未打包时**明确报告不支持**（`supported:false` + 原因），拒绝写入；打包后仍走官方 `setLoginItemSettings`，并区分 `enabled`（已写入）与 `active`（系统真会启动，读 `executableWillLaunchAtLogin`） | 断言：未打包 `supported=false`、尝试开启被拒且设置里不留假状态 |
+| 图片放大 | 无 | 预览点图片 → 全窗口遮罩放大；Esc / 点击任意处关闭（无新依赖） | 断言：lightbox 内 `src` 走自定义协议、`naturalWidth>0`；Esc 后节点消失 |
+
+### 这一轮最有价值的发现：开机启动在开发模式下是"假成功"
+
+实测证据（独立探针，直接调 Electron 官方接口）：
+
+- `setLoginItemSettings({openAtLogin:true, path: electron.exe, args:[appPath]})` 之后，`getLoginItemSettings()` 返回 `openAtLogin:true`、`executableWillLaunchAtLogin:true`、`launchItems:[{name:'electron.app.Electron', …}]`；
+- 但同一时刻 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 里**没有任何对应项**，几秒后回读又变回 `false`。
+
+也就是说：未打包时"写入成功"只是一个短暂的自读数，注册表里根本没落地。之前的实现会把这个 `true` 当成成功并写进设置文件 —— 正是"伪造成功状态"。现在改为：未打包 → `supported:false`，UI 置灰并给出原因，`setLaunchAtLogin` 直接抛错，启动时还会把历史遗留的 `true` 清掉。
+
+### 已知限制
+
+1. **开机启动只能在打包版验证**：本机没有可用的安装包，`isPackaged` 分支的注册表落地未实测（第 07 轮打包后需补验）。
+2. **附件清理不做"多笔记交叉引用"**：当前只有一篇笔记，未被本笔记引用的文件即视为可清理。
+3. **图片放大是"看"不是"编辑"**：没有缩放拖动、旋转、另存为。
+4. **迁移只处理 attachments 的一层文件**：与附件协议白名单保持一致，更深层目录不识别。
+
 ## 六、实际执行的验证记录
 
 ```

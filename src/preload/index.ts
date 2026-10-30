@@ -1,13 +1,15 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/api'
 import type {
+  AttachmentFile,
   DataDirInfo,
   EdgeNotesApi,
   EdgeNotesState,
   LoginItemState,
   MigrationResult,
   NoteSnapshot,
-  NoteStatus
+  NoteStatus,
+  TrashResult
 } from '../shared/api'
 
 /** 渲染进程唯一可用的能力面：受限 IPC，不暴露 Node.js 或任意系统 API */
@@ -43,6 +45,9 @@ const api: EdgeNotesApi = {
   saveAttachment: (bytes: Uint8Array, mime: string) =>
     ipcRenderer.invoke(IPC_CHANNELS.saveAttachment, bytes, mime) as Promise<{ relative: string; bytes: number }>,
   checkAttachments: (paths: string[]) => ipcRenderer.invoke(IPC_CHANNELS.checkAttachments, paths) as Promise<string[]>,
+  listAttachments: () => ipcRenderer.invoke(IPC_CHANNELS.listAttachments) as Promise<AttachmentFile[]>,
+  trashAttachments: (relatives: string[]) =>
+    ipcRenderer.invoke(IPC_CHANNELS.trashAttachments, relatives) as Promise<TrashResult>,
   setEditorFocused: (focused: boolean) => {
     ipcRenderer.send(IPC_CHANNELS.editorFocus, focused)
   },

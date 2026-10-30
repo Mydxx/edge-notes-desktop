@@ -69,8 +69,10 @@ export interface EdgeNotesState {
 export interface LoginItemState {
   /** 当前构建是否支持（由 Electron 平台实现决定） */
   supported: boolean
-  /** 系统里实际是否已注册 */
+  /** 启动项是否已注册（用户意图） */
   enabled: boolean
+  /** 系统是否真的会在登录时启动它（可能被 Windows「启动应用」禁用） */
+  active: boolean
   /** 需要向用户解释的附加信息（例如开发模式下注册的是 Electron 本体） */
   message: string | null
 }
@@ -89,6 +91,19 @@ export interface NoteSnapshot {
   content: string
   savedAt: number | null
   status: NoteStatus
+}
+
+/** 附件目录里的一个文件 */
+export interface AttachmentFile {
+  /** Markdown 里使用的相对路径 */
+  relative: string
+  name: string
+  bytes: number
+}
+
+export interface TrashResult {
+  trashed: number
+  failed: string[]
 }
 
 export const IPC_CHANNELS = {
@@ -114,6 +129,8 @@ export const IPC_CHANNELS = {
   openSettings: 'edge-notes:open-settings',
   saveAttachment: 'edge-notes:save-attachment',
   checkAttachments: 'edge-notes:check-attachments',
+  listAttachments: 'edge-notes:list-attachments',
+  trashAttachments: 'edge-notes:trash-attachments',
   noteGet: 'edge-notes:note-get',
   noteUpdate: 'edge-notes:note-update',
   noteSaveNow: 'edge-notes:note-save-now',
@@ -157,6 +174,10 @@ export interface EdgeNotesApi {
   saveAttachment(bytes: Uint8Array, mime: string): Promise<{ relative: string; bytes: number }>
   /** 返回其中已经不存在的附件路径（用于预览时提示"图片缺失"） */
   checkAttachments(paths: string[]): Promise<string[]>
+  /** 列出附件目录里的全部文件（用于清理未被引用的图片） */
+  listAttachments(): Promise<AttachmentFile[]>
+  /** 把指定附件移入回收站（可还原） */
+  trashAttachments(relatives: string[]): Promise<TrashResult>
   /** 编辑器聚焦时抑制自动收起 */
   setEditorFocused(focused: boolean): void
 
