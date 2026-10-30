@@ -27,7 +27,7 @@ import {
 const shotsDir = path.join(artifactsDir, 'notes-shots')
 const userDataDir = path.join(artifactsDir, 'notes-user-data')
 const logFile = path.join(artifactsDir, 'notes.jsonl')
-const noteFile = path.join(userDataDir, 'edge-notes-note.txt')
+const noteFile = path.join(userDataDir, 'edge-notes-note.md')
 const cdpPort = 9334
 
 const { record, finish } = createReporter()
@@ -193,6 +193,128 @@ async function main() {
   await waitFor(page, `document.activeElement?.id !== 'note-editor'`, 3000, '编辑器失焦')
   const blurredState = await waitCollapsed(page)
   record('编辑器失焦后恢复正常自动收起', blurredState.runtime.phase === 'collapsed', blurredState.runtime.phase)
+
+  // -------------------------------------- Markdown 预览 / XSS / 图片粘贴
+  await openPanel(page, metrics)
+  await clickIntoEditor(page, expandedBounds, scale)
+  await focusEditorAtEnd(page)
+  await page.insertText('\n# 标题一级\n\n**粗体** 与 `行内代码`\n\n- 项目一\n- 项目二\n\n> 引用一句\n')
+  await delay(400)
+
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await waitFor(page, `document.querySelector('#note-preview') !== null`, 3000, '进入预览模式')
+  const previewInfo = await page.evaluate(`(() => {
+    const root = document.querySelector('#note-preview')
+    if (!root) return null
+    return {
+      h1: root.querySelector('h1')?.textContent ?? '',
+      strong: root.querySelector('strong')?.textContent ?? '',
+      code: root.querySelector('code')?.textContent ?? '',
+      items: root.querySelectorAll('li').length,
+      quote: root.querySelector('blockquote')?.textContent?.trim() ?? '',
+      editorHidden: getComputedStyle(document.getElementById('note-editor')).display === 'none'
+    }
+  })()`)
+  record(
+    'Markdown 预览渲染标题/粗体/行内代码/列表/引用',
+    previewInfo?.h1 === '标题一级' &&
+      previewInfo.strong === '粗体' &&
+      previewInfo.code === '行内代码' &&
+      previewInfo.items === 2 &&
+      previewInfo.quote === '引用一句' &&
+      previewInfo.editorHidden === true,
+    JSON.stringify(previewInfo)
+  )
+  await page.captureScreenshot(path.join(shotsDir, '05-markdown-preview.png'))
+
+  // XSS：笔记内容是不可信输入，预览必须净化
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await delay(200)
+  await focusEditorAtEnd(page)
+  await page.insertText('\n<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>\n')
+  await delay(300)
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await waitFor(page, `document.querySelector('#note-preview') !== null`, 3000, '再次进入预览')
+  const xssInfo = await page.evaluate(`(() => ({
+    scripts: document.querySelectorAll('#note-preview script').length,
+    onerror: document.querySelectorAll('#note-preview [onerror]').length,
+    flagged: window.__xss === undefined ? 'clean' : String(window.__xss)
+  }))()`)
+  record(
+    '预览对笔记内容做了 XSS 净化',
+    xssInfo.scripts === 0 && xssInfo.onerror === 0 && xssInfo.flagged === 'clean',
+    JSON.stringify(xssInfo)
+  )
+
+  // 剪贴板图片：真实 Ctrl+V 粘贴 → 附件落盘 → 预览里能加载
+  ps('clipboard-save', '-TextFile', clipboardBackup)
+  ps('clipboard-set-image', '-Width', '72', '-Height', '48')
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await delay(200)
+  await clickIntoEditor(page, expandedBounds, scale)
+  await focusEditorAtEnd(page)
+  const ctrlVImage = { key: 'v', code: 'KeyV', windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86, modifiers: 2 }
+  await page.send('Input.dispatchKeyEvent', { type: 'keyDown', ...ctrlVImage })
+  await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...ctrlVImage })
+  await waitFor(page, `document.getElementById('note-editor').value.includes('](attachments/')`, 6000, '图片引用写入正文')
+  const mdWithImage = await editorValue(page)
+  const attachmentMatch = /\]\((attachments\/[^)]+)\)/.exec(mdWithImage)
+  const attachmentPath = attachmentMatch ? path.join(userDataDir, attachmentMatch[1]) : ''
+  record('粘贴图片后正文写入 attachments 引用', Boolean(attachmentMatch) && existsSync(attachmentPath), attachmentMatch?.[1] ?? '无')
+  record('附件确实写到了磁盘', existsSync(attachmentPath) && readFileSync(attachmentPath).length > 100, `${existsSync(attachmentPath) ? readFileSync(attachmentPath).length : 0} bytes`)
+
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 8000, '图片引用已保存')
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await waitFor(
+    page,
+    `(() => { const img = document.querySelector('#note-preview img'); return img !== null && img.complete && img.naturalWidth > 0 })()`,
+    6000,
+    '预览里图片解码完成'
+  )
+  const imageInfo = await page.evaluate(`(() => {
+    const img = document.querySelector('#note-preview img')
+    if (!img) return null
+    return { src: img.getAttribute('src'), width: img.naturalWidth, complete: img.complete }
+  })()`)
+  record(
+    '预览通过自定义协议加载附件图片',
+    Boolean(imageInfo) && String(imageInfo.src).startsWith('edgenote-media://') && imageInfo.width > 0,
+    JSON.stringify(imageInfo)
+  )
+  await page.captureScreenshot(path.join(shotsDir, '06-image-preview.png'))
+  ps('clipboard-restore', '-TextFile', clipboardBackup)
+
+  // 自定义协议只允许附件目录下的单层文件，任何 ../ 必须被拒绝
+  const traversalFrom = readLog(logFile).length
+  const traversalResult = await page.evaluate(`new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => resolve('loaded')
+    img.onerror = () => resolve('blocked')
+    img.src = 'edgenote-media://local/attachments/..%2F..%2Fedge-notes-note.md'
+    setTimeout(() => resolve('timeout'), 2500)
+  })`)
+  const traversalLog = readLog(logFile).slice(traversalFrom)
+  record(
+    '附件协议拒绝目录穿越',
+    traversalResult === 'blocked' && traversalLog.some((item) => item.event === 'attachment-denied'),
+    `${traversalResult} / denied=${traversalLog.filter((item) => item.event === 'attachment-denied').length}`
+  )
+
+  // 外链图片一律不加载（应用不联网）
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await delay(200)
+  await focusEditorAtEnd(page)
+  await page.insertText('\n![](https://example.com/remote.png)\n')
+  await delay(300)
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await waitFor(page, `document.querySelector('#note-preview') !== null`, 3000, '外链场景预览')
+  const remoteInfo = await page.evaluate(`(() => ({
+    blocked: document.querySelectorAll('#note-preview .preview__blocked').length,
+    remoteImgs: document.querySelectorAll('#note-preview img[src^="http"]').length
+  }))()`)
+  record('外链图片被阻止加载', remoteInfo.blocked >= 1 && remoteInfo.remoteImgs === 0, JSON.stringify(remoteInfo))
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await delay(200)
 
   // ------------------------------------------------------------ 清空 + 取消
   await openPanel(page, metrics)

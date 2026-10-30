@@ -39,6 +39,8 @@ const api: EdgeNotesApi = {
   },
   saveNoteNow: (content: string) => ipcRenderer.invoke(IPC_CHANNELS.noteSaveNow, content) as Promise<NoteStatus>,
   retrySave: () => ipcRenderer.invoke(IPC_CHANNELS.noteRetry) as Promise<NoteStatus>,
+  saveAttachment: (bytes: Uint8Array, mime: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.saveAttachment, bytes, mime) as Promise<{ relative: string; bytes: number }>,
   setEditorFocused: (focused: boolean) => {
     ipcRenderer.send(IPC_CHANNELS.editorFocus, focused)
   },

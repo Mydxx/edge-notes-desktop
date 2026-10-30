@@ -1,5 +1,7 @@
+import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { PointerEvent as ReactPointerEvent } from 'react'
+import type { ClipboardEvent as ReactClipboardEvent, PointerEvent as ReactPointerEvent } from 'react'
 import type { CollapseDelay, DataDirInfo, EdgeNotesState, LoginItemState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_OPTIONS } from '../shared/constants'
 
@@ -40,6 +42,24 @@ function IconSettings() {
   )
 }
 
+function IconEye() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1.8 8s2.3-4.1 6.2-4.1S14.2 8 14.2 8s-2.3 4.1-6.2 4.1S1.8 8 1.8 8Z" />
+      <circle cx="8" cy="8" r="1.9" />
+    </svg>
+  )
+}
+
+function IconPencil() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M11.1 2.6a1.5 1.5 0 0 1 2.1 2.1l-7.3 7.3-2.9.8.8-2.9 7.3-7.3Z" />
+      <path d="M10 3.7l2.3 2.3" />
+    </svg>
+  )
+}
+
 function IconMinimize() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
@@ -58,6 +78,9 @@ export default function App() {
   const [loginItem, setLoginItem] = useState<LoginItemState | null>(null)
   const [dataDir, setDataDir] = useState<DataDirInfo | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
+  const [preview, setPreview] = useState(false)
+  const [previewHtml, setPreviewHtml] = useState('')
+  const [attachError, setAttachError] = useState<string | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
   const loadedRef = useRef(false)
   /** 拖动调宽时的锚点（面板贴边那一侧的屏幕坐标） */
@@ -320,6 +343,77 @@ export default function App() {
     }
   }, [])
 
+  /**
+   * Markdown → 安全 HTML。
+   * 两道处理：DOMPurify 净化（笔记内容可能是粘贴来的，绝不当可信 HTML），
+   * 再把附件相对路径改写成自定义协议，外链图片直接抹掉 src（应用不联网）。
+   */
+  const renderMarkdown = useCallback((source: string): string => {
+    const raw = marked.parse(source, { gfm: true, breaks: true, async: false })
+    const clean = DOMPurify.sanitize(raw, { USE_PROFILES: { html: true } })
+    const container = document.createElement('div')
+    container.innerHTML = clean
+
+    container.querySelectorAll('img').forEach((img) => {
+      const src = img.getAttribute('src') ?? ''
+      if (src.startsWith('attachments/')) {
+        // 不用 loading="lazy"：便签里图片数量很少，懒加载反而会让刚切到预览时图片空白
+        img.setAttribute('src', `edgenote-media://local/${src}`)
+      } else {
+        // 外链图片不加载（应用不联网），也不用留一个破图标，换成可读的说明
+        const blocked = document.createElement('span')
+        blocked.className = 'preview__blocked'
+        blocked.textContent = `［外链图片已阻止${img.getAttribute('alt') ? `：${img.getAttribute('alt')}` : ''}］`
+        img.replaceWith(blocked)
+      }
+    })
+
+    container.querySelectorAll('a').forEach((anchor) => {
+      const href = anchor.getAttribute('href') ?? ''
+      anchor.removeAttribute('href')
+      anchor.setAttribute('data-href', href)
+      anchor.setAttribute('title', '预览模式不打开链接')
+    })
+
+    return container.innerHTML
+  }, [])
+
+  const togglePreview = useCallback(() => {
+    setPreview((wasPreview) => {
+      if (!wasPreview) {
+        setPreviewHtml(renderMarkdown(editorRef.current?.value ?? ''))
+      }
+      return !wasPreview
+    })
+  }, [renderMarkdown])
+
+  /** 剪贴板里的图片落盘，并在光标处插入 Markdown 图片语法 */
+  const handlePaste = useCallback(async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
+    // 截图走 items（kind=file），部分来源只给 files，两种都收
+    const fromItems = Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null)
+    const files = fromItems.length > 0 ? fromItems : Array.from(event.clipboardData?.files ?? []).filter((file) => file.type.startsWith('image/'))
+    if (files.length === 0) {
+      return
+    }
+    event.preventDefault()
+    const editor = event.currentTarget
+    try {
+      for (const file of files) {
+        const bytes = new Uint8Array(await file.arrayBuffer())
+        const saved = await window.edgeNotes.saveAttachment(bytes, file.type)
+        const prefix = editor.selectionStart > 0 && !editor.value.endsWith('\n') ? '\n' : ''
+        editor.setRangeText(`${prefix}![](${saved.relative})\n`, editor.selectionStart, editor.selectionEnd, 'end')
+      }
+      window.edgeNotes.updateNote(editor.value)
+      setAttachError(null)
+    } catch (reason) {
+      setAttachError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [])
+
   const settings = state?.settings
   const alwaysOnTop = settings?.alwaysOnTop ?? false
   const pinnedOpen = settings?.pinnedOpen ?? false
@@ -370,6 +464,17 @@ export default function App() {
           }}
         >
           <IconPin />
+        </button>
+        <button
+          id="toggle-preview"
+          type="button"
+          className="iconBtn"
+          aria-pressed={preview}
+          aria-label={preview ? '返回编辑' : '预览 Markdown'}
+          title={preview ? '返回编辑' : '预览 Markdown'}
+          onClick={togglePreview}
+        >
+          {preview ? <IconPencil /> : <IconEye />}
         </button>
         <button
           id="open-settings"
@@ -535,17 +640,25 @@ export default function App() {
 
       {settingsError ? <div className="errorBar">{settingsError}</div> : null}
 
+      {/* 编辑区常驻挂载：切到预览时只隐藏，避免卸载丢失未受控输入框里的内容和光标 */}
       <textarea
         ref={editorRef}
         id="note-editor"
-        className="editor"
-        placeholder="随手记点什么…"
+        className={`editor${preview ? ' editor--hidden' : ''}`}
+        placeholder="随手记点什么…（支持 Markdown，直接粘贴截图）"
         spellCheck={false}
         autoComplete="off"
         onChange={(event) => window.edgeNotes.updateNote(event.target.value)}
+        onPaste={(event) => void handlePaste(event)}
         onFocus={() => window.edgeNotes.setEditorFocused(true)}
         onBlur={() => window.edgeNotes.setEditorFocused(false)}
       />
+
+      {preview ? (
+        <div className="preview" id="note-preview" dangerouslySetInnerHTML={{ __html: previewHtml }} />
+      ) : null}
+
+      {attachError ? <div className="errorBar">图片插入失败：{attachError}</div> : null}
 
       <footer className="foot">
         <span id="save-status" className={`foot__status foot__status--${status.state}`} title={status.message ?? ''}>

@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'count-instances', 'close-window', 'kill-renderer', 'clipboard-save', 'clipboard-set', 'clipboard-restore')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'count-instances', 'close-window', 'kill-renderer', 'clipboard-save', 'clipboard-set', 'clipboard-set-image', 'clipboard-restore')][string]$Command,
   [string]$OutDir = '',
   [int]$X = -1,
   [int]$Y = -1,
@@ -255,6 +255,25 @@ switch ($Command) {
     if ($null -eq $value) { $value = '' }
     [System.IO.File]::WriteAllText($TextFile, $value, (New-Object System.Text.UTF8Encoding($false)))
     "CLIPBOARD-SAVED $($value.Length)"
+  }
+  'clipboard-set-image' {
+    # Put a real bitmap on the clipboard so Ctrl+V produces an image paste event.
+    Add-Type -AssemblyName System.Windows.Forms
+    Add-Type -AssemblyName System.Drawing
+    $w = if ($Width -gt 0) { $Width } else { 64 }
+    $h = if ($Height -gt 0) { $Height } else { 48 }
+    $bmp = New-Object System.Drawing.Bitmap($w, $h)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.Clear([System.Drawing.Color]::FromArgb(255, 47, 111, 237))
+    $g.FillEllipse([System.Drawing.Brushes]::White, [int]($w / 4), [int]($h / 4), [int]($w / 2), [int]($h / 2))
+    $g.Dispose()
+    try {
+      [System.Windows.Forms.Clipboard]::SetImage($bmp)
+    } catch {
+      throw "SetImage failed (STA required?): $($_.Exception.Message)"
+    }
+    $bmp.Dispose()
+    "CLIPBOARD-IMAGE-SET ${w}x${h} types=$(([System.Windows.Forms.Clipboard]::GetDataObject()).GetFormats() -join ',')"
   }
   'clipboard-set' {
     if (-not $TextFile -or -not (Test-Path $TextFile)) { throw 'clipboard-set requires -TextFile' }

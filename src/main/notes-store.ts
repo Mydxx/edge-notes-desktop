@@ -1,4 +1,4 @@
-import { renameSync, writeFileSync } from 'node:fs'
+import { existsSync, renameSync, writeFileSync } from 'node:fs'
 import { readFile, rename, stat, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { NoteSnapshot, NoteStatus } from '../shared/api'
@@ -42,8 +42,23 @@ export class NotesStore {
   private frozen = false
 
   constructor(userDataDir: string, emitStatus: (status: NoteStatus) => void) {
-    this.filePath = path.join(userDataDir, 'edge-notes-note.txt')
+    this.filePath = path.join(userDataDir, 'edge-notes-note.md')
     this.emitStatus = emitStatus
+    this.migrateLegacyFile(userDataDir)
+  }
+
+  /** 从纯文本版本升级：老 .txt 直接改名为 .md，内容一字不动 */
+  private migrateLegacyFile(userDataDir: string): void {
+    const legacyPath = path.join(userDataDir, 'edge-notes-note.txt')
+    if (existsSync(this.filePath) || !existsSync(legacyPath)) {
+      return
+    }
+    try {
+      renameSync(legacyPath, this.filePath)
+      log('note-migrated', { from: 'edge-notes-note.txt', to: 'edge-notes-note.md' })
+    } catch (error) {
+      log('note-migrate-failed', { message: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   getFilePath(): string {

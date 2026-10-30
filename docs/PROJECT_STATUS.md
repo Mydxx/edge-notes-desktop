@@ -202,6 +202,49 @@
 1. **`var(--font-body)` 未定义导致整条 `font` 简写失效**，正文字号一直停在继承来的 12px——字号切换测试直接把它抓了出来（"14.5px → 16px" 的断言最初是 "12px → 12px"）。
 2. **`--user-data-dir` 会被 Chromium 从 `process.argv` 里吞掉**，导致"测试用显式目录时不要自动选盘"的守卫失效，测试实例一度被重定向到 `D:\Edge Notes Data`、读到真实设置而失败。改为判断 `userData` 是否已被外部改写（可靠信号），测试隔离恢复。
 
+## 五-6、Markdown 预览 + 图片粘贴（方案 B）
+
+用户选择「方案 B：Markdown + 图片」，按此实施。目标是让便签能写 Markdown、能直接粘贴截图，
+但**不放弃纯文本可读性**（文件仍是 UTF-8 文本，可用记事本打开），也不引入联网能力。
+
+### 实现
+
+| 部分 | 做法 |
+|---|---|
+| 存储 | `edge-notes-note.txt` → `edge-notes-note.md`；启动时若只有旧 `.txt` 就改名为 `.md`（内容不动）；数据目录迁移也会带上旧文件 |
+| 编辑/预览 | 头栏眼睛图标切换；编辑区**保持挂载只做隐藏**，避免卸载未受控 textarea 丢掉正文与光标 |
+| 渲染 | `marked`（GFM + 单换行转 `<br>`）→ `DOMPurify` 净化 → 再把 `attachments/…` 改写成自定义协议 |
+| 图片粘贴 | `paste` 事件取 `items`/`files` 里的图片 → IPC 写盘 → 光标处插入 `![](attachments/xxx.png)` |
+| 图片读取 | 自定义协议 `edgenote-media://local/attachments/<file>`，`protocol.handle` 只解析附件目录下的**单层文件名**；CSP 仅放行该协议 + `data:` |
+| 拒绝项 | 外链图片不加载（预览里显示"外链图片已阻止"）；SVG 不收；单张 > 10 MB 拒绝；`<script>`/`onerror` 等经净化剔除 |
+
+### 验收（真实运行）
+
+| 项 | 证据 |
+|---|---|
+| Markdown 渲染 | 预览里 `h1/strong/code/li×2/blockquote` 全部正确，编辑区隐藏 |
+| XSS 净化 | 粘贴 `<img src=x onerror=…><script>…</script>` 后：`script` 元素 0 个、`[onerror]` 0 个、`window.__xss` 未被写入 |
+| 图片粘贴 | **真实剪贴板位图 + 真实 Ctrl+V** → 正文出现 `![](attachments/img-….png)`，附件落盘 393 bytes |
+| 图片加载 | 预览 `<img>` 走自定义协议，`naturalWidth=72`（与写入的位图一致） |
+| 目录穿越 | `edgenote-media://local/attachments/..%2F..%2Fedge-notes-note.md` → 加载失败 + 主进程 `attachment-denied` |
+| 外链图片 | `![](https://…)` → 显示阻止提示，`img[src^=http]` 数量 0 |
+| 旧文件升级 | 只有 `.txt` 的目录启动后生成 `.md`、`.txt` 消失、内容不变（18 字） |
+
+### 本轮踩到并修掉的两个坑
+
+1. **预览图片一直 `naturalWidth=0`**：不是协议问题（探针里 `new Image()` 同 URL 能加载 32×32），
+   是我给 `<img>` 加了 `loading="lazy"`，切到预览瞬间图片被浏览器推迟加载。去掉懒加载，并把断言从
+   "元素存在"改成"解码完成（`complete && naturalWidth>0`）"。
+2. **改数据目录时笔记没跟过去**：`data-location.ts` 里还写着旧文件名 `edge-notes-note.txt`，
+   迁移只搬了设置文件。修正为搬 `.md`，并兼容带上遗留的 `.txt`。
+
+### 已知取舍
+
+1. 预览里的链接**不打开**（避免渲染层跳转/联网），保留视觉提示；需要跳转时再评估是否走系统浏览器。
+2. 笔记里手写的 `<script>` 会被净化掉，用户看不到原样文本——这是"内容当不可信 HTML"的必然结果。
+3. 图片只按原尺寸显示（`max-width:100%`），没有点击放大。
+4. 附件不会随笔记自动清理：删掉正文里的引用不会删文件，需要手动清 `attachments`。
+
 ## 六、实际执行的验证记录
 
 ```

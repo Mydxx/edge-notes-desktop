@@ -106,6 +106,7 @@ export const IPC_CHANNELS = {
   quit: 'edge-notes:quit',
   stateChanged: 'edge-notes:state-changed',
   openSettings: 'edge-notes:open-settings',
+  saveAttachment: 'edge-notes:save-attachment',
   noteGet: 'edge-notes:note-get',
   noteUpdate: 'edge-notes:note-update',
   noteSaveNow: 'edge-notes:note-save-now',
@@ -144,6 +145,8 @@ export interface EdgeNotesApi {
   saveNoteNow(content: string): Promise<NoteStatus>
   /** 保存失败后重试上一次内容 */
   retrySave(): Promise<NoteStatus>
+  /** 把剪贴板里的图片写入附件目录，返回可嵌入 Markdown 的相对路径 */
+  saveAttachment(bytes: Uint8Array, mime: string): Promise<{ relative: string; bytes: number }>
   /** 编辑器聚焦时抑制自动收起 */
   setEditorFocused(focused: boolean): void
 

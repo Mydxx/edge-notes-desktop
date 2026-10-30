@@ -1,6 +1,6 @@
 // 第 06 轮：Windows 桌面集成验证（系统托盘 / 隐藏与退出 / 开机启动 / 二次启动唤出）
 // 用法：npm run build && node tests/desktop.e2e.mjs
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { connectPage } from './lib/cdp.mjs'
@@ -89,7 +89,7 @@ async function main() {
     // 隐藏不丢内容：既要内存里有，也要真的落盘
     const noteWhileHidden = await page.evaluate('window.edgeNotes.getNote()')
     await delay(900)
-    const noteFilePath = path.join(userDataDir, 'edge-notes-note.txt')
+    const noteFilePath = path.join(userDataDir, 'edge-notes-note.md')
     const onDisk = existsSync(noteFilePath) ? readFileSync(noteFilePath, 'utf8') : ''
     record('隐藏期间内容仍在内存', noteWhileHidden.content.includes('隐藏到托盘前的测试内容'), `${noteWhileHidden.content.length} 字`)
     record('隐藏期间内容已落盘', onDisk.includes('隐藏到托盘前的测试内容'), `${onDisk.length} 字`)
@@ -201,7 +201,7 @@ async function main() {
       await delay(900)
 
       const migrated = await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(migrateTarget)})`)
-      const noteInTarget = path.join(migrateTarget, 'edge-notes-note.txt')
+      const noteInTarget = path.join(migrateTarget, 'edge-notes-note.md')
       const settingsInTarget = path.join(migrateTarget, 'edge-notes-settings.json')
       record(
         '迁移后新目录里数据齐全',
@@ -249,6 +249,33 @@ async function main() {
       page3.close()
     } catch (error) {
       app3.kill()
+      throw error
+    }
+
+    // ------------------------------- 八、旧版纯文本笔记（.txt）升级到 .md
+    const legacyDir = path.join(artifactsDir, 'desktop-legacy')
+    rmSync(legacyDir, { recursive: true, force: true })
+    mkdirSync(legacyDir, { recursive: true })
+    writeFileSync(path.join(legacyDir, 'edge-notes-note.txt'), '# 旧版纯文本\n这段内容必须原样保留', 'utf8')
+    const legacyFrom = readLog(logFile).length
+    const legacyApp = launchApp({ userDataDir: legacyDir, logFile, cdpPort })
+    try {
+      await waitForEvent(logFile, 'dock-started', { timeoutMs: 40000, fromIndex: legacyFrom })
+      const legacyPage = await connectPage(cdpPort)
+      await waitFor(legacyPage, `document.getElementById('note-editor') !== null`, 5000, '编辑器就绪')
+      const legacyNote = await legacyPage.evaluate('window.edgeNotes.getNote()')
+      record(
+        '旧版 .txt 笔记自动迁移为 .md 且内容不变',
+        legacyNote.content.includes('这段内容必须原样保留') &&
+          existsSync(path.join(legacyDir, 'edge-notes-note.md')) &&
+          !existsSync(path.join(legacyDir, 'edge-notes-note.txt')),
+        `${legacyNote.content.length} 字`
+      )
+      quitApp(legacyPage)
+      await waitChildExit(legacyApp, 10000)
+      legacyPage.close()
+    } catch (error) {
+      legacyApp.kill()
       throw error
     }
 

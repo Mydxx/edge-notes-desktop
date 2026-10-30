@@ -4,7 +4,9 @@ import path from 'node:path'
 import { log } from './log'
 
 const SETTINGS_FILE = 'edge-notes-settings.json'
-const NOTE_FILE = 'edge-notes-note.txt'
+const NOTE_FILE = 'edge-notes-note.md'
+/** 纯文本时代的历史文件名，迁移时一起带走，避免升级用户的笔记留在旧目录 */
+const LEGACY_NOTE_FILE = 'edge-notes-note.txt'
 const POINTER_FILE = 'data-location.json'
 
 /**
@@ -145,12 +147,16 @@ export function migrateDataDir(target: string): MigrationResult {
   if (!existsSync(to)) {
     mkdirSync(to, { recursive: true })
   }
-  if (existsSync(path.join(to, NOTE_FILE)) || existsSync(path.join(to, SETTINGS_FILE))) {
+  if (
+    existsSync(path.join(to, NOTE_FILE)) ||
+    existsSync(path.join(to, LEGACY_NOTE_FILE)) ||
+    existsSync(path.join(to, SETTINGS_FILE))
+  ) {
     throw new Error('目标目录里已经有 Edge Notes 的数据，请另选一个空目录')
   }
 
   const copied: string[] = []
-  for (const name of [SETTINGS_FILE, NOTE_FILE]) {
+  for (const name of [SETTINGS_FILE, NOTE_FILE, LEGACY_NOTE_FILE]) {
     const src = path.join(from, name)
     if (!existsSync(src)) {
       continue

@@ -528,6 +528,144 @@ body {
   background: transparent;
 }
 
+/* ------------------------------------------------------- Markdown 预览 */
+
+.editor--hidden {
+  display: none;
+}
+
+.preview {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: var(--space-6) var(--space-7) 18px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  color: var(--color-text);
+  font: 400 var(--text-body) / var(--leading-body) var(--font-ui);
+  letter-spacing: 0.012em;
+  user-select: text;
+}
+
+.preview > :first-child {
+  margin-top: 0;
+}
+
+.preview h1,
+.preview h2,
+.preview h3 {
+  margin: 1.1em 0 0.45em;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.preview h1 {
+  font-size: 1.32em;
+}
+
+.preview h2 {
+  font-size: 1.18em;
+}
+
+.preview h3 {
+  font-size: 1.06em;
+}
+
+.preview p {
+  margin: 0.5em 0;
+}
+
+.preview ul,
+.preview ol {
+  margin: 0.5em 0;
+  padding-left: 1.35em;
+}
+
+.preview li {
+  margin: 0.18em 0;
+}
+
+.preview blockquote {
+  margin: 0.6em 0;
+  padding: 2px 0 2px var(--space-5);
+  border-left: 3px solid var(--color-border-strong);
+  color: var(--color-text-dim);
+}
+
+.preview code {
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-sunken);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 0.92em;
+}
+
+.preview pre {
+  margin: 0.6em 0;
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-sunken);
+  overflow-x: auto;
+}
+
+.preview pre code {
+  padding: 0;
+  background: transparent;
+}
+
+.preview hr {
+  margin: 1em 0;
+  border: none;
+  border-top: 1px solid var(--color-border);
+}
+
+.preview table {
+  width: 100%;
+  margin: 0.6em 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+
+.preview th,
+.preview td {
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  text-align: left;
+}
+
+.preview img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 0.55em 0;
+  border-radius: var(--radius-md);
+}
+
+.preview a {
+  color: var(--color-accent);
+  text-decoration: underline dotted;
+  cursor: default;
+}
+
+.preview__blocked {
+  color: var(--color-text-muted);
+  font-size: 0.92em;
+}
+
+.preview::-webkit-scrollbar {
+  width: 8px;
+}
+
+.preview::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: var(--radius-lg);
+  background-clip: content-box;
+  background-color: var(--color-scroll-thumb);
+}
+
+.preview::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* ---------------------------------------------------------------- 底栏 */
 
 .foot {

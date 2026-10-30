@@ -1,9 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
+import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC_CHANNELS } from '../shared/api'
 import type { DockPhase, DockSide, EdgeNotesSettings, EdgeNotesState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
+import { mimeForAttachment, resolveAttachmentUrl, saveAttachment } from './attachments'
 import { getDataDirInfo, migrateDataDir, resolveUserDataDir } from './data-location'
 import { EdgeDock } from './edge-dock'
 import { applyLoginItem, readLoginItem, reconcileLoginItem } from './login-item'
@@ -17,6 +19,14 @@ app.setName('Edge Notes Desktop')
 
 // 必须在 app ready 之前决定数据目录（用户可能已经把它挪到别的盘）
 resolveUserDataDir()
+
+/**
+ * 笔记里的图片走自定义协议，而不是 file://：
+ * file 协议会把整个磁盘暴露给渲染层，这里只允许读附件目录下的单层文件。
+ */
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'edgenote-media', privileges: { standard: true, secure: true, supportFetchAPI: true } }
+])
 
 const devServerUrl = process.env.VITE_DEV_SERVER_URL ?? ''
 
@@ -389,6 +399,17 @@ function registerIpc(): void {
     return notes.writeNow()
   })
 
+  ipcMain.handle(IPC_CHANNELS.saveAttachment, (event, bytes: unknown, mime: unknown) => {
+    requireSender(event)
+    if (!(bytes instanceof Uint8Array)) {
+      throw new TypeError('attachment bytes must be a Uint8Array')
+    }
+    if (typeof mime !== 'string') {
+      throw new TypeError('attachment mime must be a string')
+    }
+    return saveAttachment(app.getPath('userData'), bytes, mime)
+  })
+
   ipcMain.on(IPC_CHANNELS.editorFocus, (event, value: unknown) => {
     if (!mainWindow || event.sender !== mainWindow.webContents) {
       return
@@ -407,6 +428,21 @@ async function bootstrap(): Promise<void> {
     broadcastNoteStatus(status)
   })
   await notes.load()
+
+  // 附件只读协议：edgenote-media://local/attachments/<file>
+  protocol.handle('edgenote-media', async (request) => {
+    const target = resolveAttachmentUrl(app.getPath('userData'), request.url)
+    if (!target) {
+      log('attachment-denied', { url: request.url.slice(0, 120) })
+      return new Response('not found', { status: 404 })
+    }
+    try {
+      const data = await readFile(target)
+      return new Response(data, { headers: { 'content-type': mimeForAttachment(target) } })
+    } catch {
+      return new Response('not found', { status: 404 })
+    }
+  })
 
   log('app-ready', {
     userData: app.getPath('userData'),

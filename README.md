@@ -71,8 +71,11 @@ tests/lib/                 CDP 客户端、日志读取、PowerShell 驱动脚�
 ```
 <数据目录>\
   edge-notes-settings.json    停靠侧、宽度、置顶、固定展开、主题、字号、开机启动
-  edge-notes-note.txt         笔记正文（UTF-8 纯文本）
+  edge-notes-note.md          笔记正文（UTF-8 Markdown 源文；旧版 .txt 启动时自动改名）
+  attachments\                粘贴进来的图片（png/jpg/gif/webp，单张 ≤ 10 MB）
 ```
+
+笔记是 **Markdown**：头栏的眼睛图标在「编辑源码 / 预览」之间切换。直接 `Ctrl+V` 粘贴截图会把图片落到 `attachments\`，并在光标处插入 `![](attachments/xxx.png)`；预览用自定义协议 `edgenote-media://local/attachments/<file>` 读取，**只允许附件目录下的单层文件**（`../` 一律拒绝）。外链图片不加载（应用不联网），HTML 经 DOMPurify 净化（`<script>`/`onerror` 会被剔除）。
 
 - 目录位置记录在指针文件 `%APPDATA%\Edge Notes Desktop\data-location.json` 里（**始终在默认位置**，否则改了目录下次就找不到数据）。
 - 设置面板「数据目录 → 更改…」可以迁移到任意目录：复制 → 逐文件校验 → 写指针 → 自动重启；目标目录已有数据时**直接拒绝**，不覆盖。
@@ -101,6 +104,7 @@ E2E 会**真实移动鼠标、真实点击、真实读写剪贴板**，因此：
 | 05 UI 与视觉精修（设计 Token、头栏收敛、底栏状态、焦点环） | ✅（视觉 14 项断言 + 9 组截图） |
 | 06 桌面集成（托盘、隐藏/退出、开机启动） | ✅（桌面集成 32 项断言） |
 | 06·5 体验修复（浅色主题、字号档位、字体栈、数据目录外置） | ✅（共 163 项断言） |
+| 06·6 Markdown 预览 + 图片粘贴（方案 B） | ✅（共 171 项断言） |
 | 07 打包与日常使用测试 | 未开始 |
 
 界面样式统一由 `src/renderer/styles.css` 顶部的设计 Token 驱动（颜色/间距/圆角/字号/结构尺寸），组件内不写死数值。
