@@ -7,6 +7,7 @@ import type {
   EdgeNotesState,
   LoginItemState,
   MigrationResult,
+  NotesFilesInfo,
   NotesIndexState,
   NoteSnapshot,
   NoteStatus,
@@ -44,6 +45,9 @@ const api: EdgeNotesApi = {
   },
   getReferencedAttachments: () =>
     ipcRenderer.invoke(IPC_CHANNELS.referencedAttachments) as Promise<string[]>,
+  getNotesInfo: () => ipcRenderer.invoke(IPC_CHANNELS.notesInfo) as Promise<NotesFilesInfo>,
+  openNotesFolder: () => ipcRenderer.invoke(IPC_CHANNELS.openNotesFolder) as Promise<void>,
+  revealActiveNote: () => ipcRenderer.invoke(IPC_CHANNELS.revealActiveNote) as Promise<void>,
   onNotesIndexChanged: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, index: NotesIndexState): void => {
       listener(index)

@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'count-instances', 'close-window', 'kill-renderer', 'clipboard-save', 'clipboard-set', 'clipboard-set-image', 'clipboard-restore')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'count-instances', 'close-window', 'kill-renderer', 'clipboard-save', 'clipboard-set', 'clipboard-set-image', 'clipboard-restore', 'hotkey-wake')][string]$Command,
   [string]$OutDir = '',
   [int]$X = -1,
   [int]$Y = -1,
@@ -118,6 +118,18 @@ switch ($Command) {
       Start-Sleep -Milliseconds $Wait
     }
     "MOVED $X $Y"
+  }
+  'hotkey-wake' {
+    # 真实键盘事件触发全局快捷键 Ctrl+Alt+N（RegisterHotKey 是系统级的，不要求窗口在前台）
+    [EdgeNative]::keybd_event(0x11, 0, 0, [UIntPtr]::Zero)
+    [EdgeNative]::keybd_event(0x12, 0, 0, [UIntPtr]::Zero)
+    [EdgeNative]::keybd_event(0x4E, 0, 0, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 90
+    [EdgeNative]::keybd_event(0x4E, 0, 2, [UIntPtr]::Zero)
+    [EdgeNative]::keybd_event(0x12, 0, 2, [UIntPtr]::Zero)
+    [EdgeNative]::keybd_event(0x11, 0, 2, [UIntPtr]::Zero)
+    Start-Sleep -Milliseconds 300
+    'HOTKEY-SENT ctrl+alt+n'
   }
   'shot' {
     Save-Shot $Name

@@ -56,6 +56,48 @@ export function normalizeTitle(raw: unknown): string {
   return (text || '未命名').slice(0, MAX_TITLE_LENGTH)
 }
 
+/** Windows 不允许出现在文件名里的字符 */
+const ILLEGAL_FILENAME_CHARS = /[\\/:*?"<>|\u0000-\u001f]/g
+/** Windows 设备保留名，直接当文件名会失败 */
+const RESERVED_FILENAMES = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
+const MAX_FILENAME_LENGTH = 60
+
+/**
+ * 标签 → 文件名主干（不含 .md）。
+ * 只做"能落盘"的清洗，不改用户看得见的标签本身：
+ * 非法字符换成 `-`，去掉结尾的点和空格，避开 Windows 保留名。
+ */
+export function fileNameFromTitle(title: string): string {
+  const cleaned = normalizeTitle(title)
+    .replace(ILLEGAL_FILENAME_CHARS, '-')
+    .replace(/\s+/g, ' ')
+    // 连续的点会让人以为在上一级目录，也过不了索引校验，统一压成一个
+    .replace(/\.{2,}/g, '.')
+    .replace(/[. ]+$/g, '')
+    .slice(0, MAX_FILENAME_LENGTH)
+    .trim()
+  if (!cleaned) {
+    return ''
+  }
+  return RESERVED_FILENAMES.test(cleaned) ? `_${cleaned}` : cleaned
+}
+
+/** 索引里记录的 file 必须是我们自己写的那种名字，防止索引被改成 `..\\evil.md` */
+function sanitizeFileName(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') {
+    return undefined
+  }
+  const name = raw.trim()
+  if (!name.toLowerCase().endsWith('.md') || name.length > MAX_FILENAME_LENGTH + 8) {
+    return undefined
+  }
+  // 用非全局正则做检测：带 g 的 lastIndex 会让连续调用互相干扰
+  if (/[\\/:*?"<>|\u0000-\u001f]/.test(name) || name.includes('..')) {
+    return undefined
+  }
+  return name
+}
+
 /** 从正文猜一个标题：优先一级标题，其次第一行非空文本 */
 function guessTitle(content: string): string {
   const heading = /^#{1,6}\s+(.+)$/m.exec(content)
@@ -93,9 +135,11 @@ function sanitizeMeta(raw: unknown): NoteMeta | null {
     return null
   }
   const viewMode: ViewMode = input.viewMode === 'preview' ? 'preview' : 'edit'
+  const file = sanitizeFileName(input.file)
   return {
     id,
     title: normalizeTitle(input.title),
+    ...(file ? { file } : {}),
     createdAt: typeof input.createdAt === 'number' ? input.createdAt : Date.now(),
     updatedAt: typeof input.updatedAt === 'number' ? input.updatedAt : Date.now(),
     viewMode,
@@ -156,8 +200,87 @@ export class NotesStore {
     return this.indexPath
   }
 
+  /** 某篇笔记的真实文件路径：文件名跟着标签走，所以必须查索引（老数据回落到 `<id>.md`） */
   notePath(id: string): string {
-    return path.join(this.notesDir, `${id}.md`)
+    const meta = this.index.notes.find((note) => note.id === id)
+    return path.join(this.notesDir, meta?.file ?? `${id}.md`)
+  }
+
+  /**
+   * 给一篇笔记挑一个不撞车的文件名。
+   * 撞车时按 `标题 (2).md`、`标题 (3).md` 递增——标签允许重复，文件名不允许。
+   */
+  private pickFileName(title: string, selfId: string | null, extra: NoteMeta[] = []): string {
+    const base = fileNameFromTitle(title) || selfId || 'note'
+    const selfPath = selfId ? this.notePath(selfId) : ''
+    const taken = new Set<string>()
+    for (const note of [...this.index.notes, ...extra]) {
+      if (selfId && note.id === selfId) {
+        continue
+      }
+      taken.add((note.file ?? `${note.id}.md`).toLowerCase())
+    }
+    for (let index = 0; index < 500; index += 1) {
+      // 加序号时先给后缀腾出位置，保证整体长度不超过上限（否则回读时会被当成非法名）
+      const suffix = index === 0 ? '' : ` (${index + 1})`
+      const stem = base.slice(0, Math.max(1, MAX_FILENAME_LENGTH - suffix.length))
+      const candidate = `${stem}${suffix}.md`
+      if (taken.has(candidate.toLowerCase())) {
+        continue
+      }
+      const abs = path.join(this.notesDir, candidate)
+      if (abs !== selfPath && existsSync(abs)) {
+        continue
+      }
+      return candidate
+    }
+    return `${base}-${Date.now().toString(36)}.md`
+  }
+
+  /**
+   * 让某篇笔记的文件名与标签一致。失败只记日志，绝不因此丢内容：
+   * 名字改不过去（文件被占用等）就先留着旧名字，下次保存再试。
+   */
+  private syncFileName(id: string): boolean {
+    const meta = this.index.notes.find((note) => note.id === id)
+    if (!meta) {
+      return false
+    }
+    const current = meta.file ?? `${meta.id}.md`
+    const desired = this.pickFileName(meta.title, meta.id)
+    if (current === desired) {
+      return false
+    }
+    const from = path.join(this.notesDir, current)
+    const to = path.join(this.notesDir, desired)
+    if (!existsSync(from)) {
+      // 文件还没建出来（新建即改名）：只更新索引，建文件时自然用新名字
+      meta.file = desired
+      return true
+    }
+    try {
+      renameSync(from, to)
+      meta.file = desired
+      log('note-file-renamed', { id, from: current, to: desired })
+      return true
+    } catch (error) {
+      log('note-file-rename-failed', { id, from: current, to: desired, message: describeError(error) })
+      return false
+    }
+  }
+
+  /** 启动时把所有笔记的文件名对齐到标签（老数据 `<id>.md` 一次性改名） */
+  private syncAllFileNames(): void {
+    let changed = false
+    for (const note of this.index.notes) {
+      if (this.syncFileName(note.id)) {
+        changed = true
+      }
+    }
+    if (changed) {
+      this.persistIndexNow()
+      log('note-file-names-synced', { count: this.index.notes.length })
+    }
   }
 
   getMigrationWarning(): string | null {
@@ -172,6 +295,10 @@ export class NotesStore {
     if (!loaded) {
       this.buildIndexFromScratch()
     }
+
+    // 文件名跟着标签走：老数据的 `<id>.md` 在这里一次性改名成 `标签.md`，
+    // 必须在读取正文之前做，这样内存里的路径与磁盘一致。
+    this.syncAllFileNames()
 
     const active = this.index.notes.find((note) => note.id === this.index.activeId) ?? this.index.notes[0]
     this.index.activeId = active.id
@@ -211,7 +338,9 @@ export class NotesStore {
       return null
     }
     const meta = createMeta(newNoteId(), '我的笔记')
-    const target = this.notePath(meta.id)
+    meta.file = this.pickFileName(meta.title, null)
+    // 此时 meta 还没进索引，notePath 会回落到 `<id>.md`，所以直接用文件名拼
+    const target = path.join(this.notesDir, meta.file)
     try {
       const content = readFileSync(legacyPath, 'utf8').slice(0, MAX_NOTE_LENGTH)
       mkdirSync(this.notesDir, { recursive: true })
@@ -230,7 +359,7 @@ export class NotesStore {
 
       // 最后才动旧文件：改名而不是删除，用户仍可手动找回
       renameSync(legacyPath, path.join(this.userDataDir, LEGACY_BACKUP_FILE))
-      log('note-migrated-single', { to: `${NOTES_DIR}/${titled.id}.md`, title: titled.title })
+      log('note-migrated-single', { to: `${NOTES_DIR}/${titled.file}`, title: titled.title })
       return titled
     } catch (error) {
       const message = describeError(error)
@@ -282,15 +411,17 @@ export class NotesStore {
     const notes: NoteMeta[] = []
     try {
       for (const entry of readdirSync(this.notesDir, { withFileTypes: true })) {
-        if (!entry.isFile() || !entry.name.endsWith('.md')) {
+        if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.md')) {
           continue
         }
-        const id = entry.name.slice(0, -3)
-        if (!/^[A-Za-z0-9._-]+$/.test(id)) {
+        // 文件名现在就是标签（可能含中文/空格），id 重新生成，只保证唯一
+        const file = sanitizeFileName(entry.name)
+        if (!file) {
           continue
         }
         const content = readFileSync(path.join(this.notesDir, entry.name), 'utf8').slice(0, MAX_NOTE_LENGTH)
-        const meta = createMeta(id, guessTitle(content))
+        const meta = createMeta(newNoteId(), guessTitle(content))
+        meta.file = file
         meta.scrollTop = 0
         notes.push(meta)
       }
@@ -299,9 +430,10 @@ export class NotesStore {
     }
     if (notes.length === 0) {
       const meta = createMeta(newNoteId(), '我的笔记')
-      writeFileSync(this.notePath(meta.id), '', 'utf8')
+      meta.file = this.pickFileName(meta.title, null, notes)
+      writeFileSync(path.join(this.notesDir, meta.file), '', 'utf8')
       notes.push(meta)
-      log('notes-seeded', { id: meta.id })
+      log('notes-seeded', { id: meta.id, file: meta.file })
     }
     this.index = { notes, activeId: notes[0].id }
     this.persistIndexNow()
@@ -398,9 +530,11 @@ export class NotesStore {
     this.writeSyncNow()
     const meta = createMeta(newNoteId(), title ?? '新笔记')
     this.index.notes.unshift(meta)
+    // 先把文件名定下来（标签即文件名），再落盘，避免先写出 `<id>.md` 再改名
+    meta.file = this.pickFileName(meta.title, meta.id)
     this.index.activeId = meta.id
     try {
-      writeFileSync(this.notePath(meta.id), '', 'utf8')
+      writeFileSync(path.join(this.notesDir, meta.file), '', 'utf8')
     } catch (error) {
       // 建文件失败就回滚索引，避免出现"指向不存在文件"的笔记
       this.index.notes = this.index.notes.filter((note) => note.id !== meta.id)
@@ -424,8 +558,20 @@ export class NotesStore {
     }
     meta.title = normalizeTitle(title)
     meta.updatedAt = Date.now()
+    // 文件名跟着标签走。但当前笔记若有内容还没落盘（写盘进行中或还在防抖窗口），
+    // 先让那次写完成：writeNow/writeSyncNow 落盘后会自己调 syncFileName。
+    const isActive = id === this.index.activeId
+    const writePending = isActive && (this.writing || this.content !== this.savedContent)
+    if (!writePending) {
+      this.syncFileName(id)
+    }
     this.persistIndexNow()
-    log('note-renamed', { id, title: meta.title })
+    log('note-renamed', {
+      id,
+      title: meta.title,
+      file: meta.file ?? null,
+      deferred: writePending
+    })
     return this.state()
   }
 
@@ -439,9 +585,10 @@ export class NotesStore {
     if (wasActive) {
       this.clearSaveTimer()
     }
+    // 必须先把真实路径取出来：splice 之后索引里就查不到这篇了，notePath 会回落到 `<id>.md`
+    const filePath = this.notePath(id)
     const [removed] = this.index.notes.splice(index, 1)
 
-    const filePath = this.notePath(id)
     if (existsSync(filePath)) {
       void shell.trashItem(filePath).catch((error: unknown) => {
         log('note-trash-failed', { id, message: describeError(error) })
@@ -450,9 +597,10 @@ export class NotesStore {
 
     if (this.index.notes.length === 0) {
       const meta = createMeta(newNoteId(), '新笔记')
-      writeFileSync(this.notePath(meta.id), '', 'utf8')
+      meta.file = this.pickFileName(meta.title, meta.id)
+      writeFileSync(path.join(this.notesDir, meta.file), '', 'utf8')
       this.index.notes.push(meta)
-      log('note-seeded-after-delete', { id: meta.id })
+      log('note-seeded-after-delete', { id: meta.id, file: meta.file })
     }
 
     if (wasActive) {
@@ -557,6 +705,10 @@ export class NotesStore {
         return this.status
       }
       await rename(tmpPath, filePath)
+      // 落盘之后再对齐文件名：此刻不会有别的写正在飞，改名不会把内容写丢
+      if (this.syncFileName(targetId)) {
+        this.persistIndexNow()
+      }
       if (targetId === this.index.activeId) {
         this.savedContent = snapshot
         this.savedAt = Date.now()
@@ -566,7 +718,7 @@ export class NotesStore {
           this.setStatus({ state: 'saving', savedAt: this.savedAt, message: null })
         }
       }
-      log('note-saved', { id: targetId, length: snapshot.length })
+      log('note-saved', { id: targetId, file: path.basename(this.notePath(targetId)), length: snapshot.length })
       return this.status
     } catch (error) {
       const message = describeError(error)
@@ -601,10 +753,14 @@ export class NotesStore {
       mkdirSync(this.notesDir, { recursive: true })
       writeFileSync(tmpPath, this.content, 'utf8')
       renameSync(tmpPath, filePath)
+      if (this.syncFileName(targetId)) {
+        this.persistIndexNow()
+      }
       this.savedContent = this.content
       this.savedAt = Date.now()
       log(freeze ? 'note-flushed-on-quit' : 'note-flushed-before-switch', {
         id: targetId,
+        file: path.basename(this.notePath(targetId)),
         length: this.content.length
       })
     } catch (error) {

@@ -14,6 +14,7 @@ import {
   ensureBuild,
   expandByHover,
   launchApp,
+  noteFilePath,
   readActiveNote,
   readNoteById,
   readNotesIndex,
@@ -30,17 +31,17 @@ import {
 const shotsDir = path.join(artifactsDir, 'notes-shots')
 const userDataDir = path.join(artifactsDir, 'notes-user-data')
 const logFile = path.join(artifactsDir, 'notes.jsonl')
-// 多笔记：正文在 notes/<activeId>.md，按索引找当前活动笔记
+// 多笔记：正文在 notes/<标签>.md（文件名跟着标签走），索引里记录真实文件名
 const cdpPort = 9334
 
 const { record, finish } = createReporter()
 
 const readNoteFile = () => readActiveNote(userDataDir)
 
-/** 当前活动笔记在磁盘上的真实路径（多笔记：notes/<activeId>.md） */
+/** 当前活动笔记在磁盘上的真实路径（文件名 = 标签，查索引里的 file 字段） */
 const activeNotePath = () => {
   const index = readNotesIndex(userDataDir)
-  return index?.activeId ? path.join(userDataDir, 'notes', `${index.activeId}.md`) : ''
+  return index?.activeId ? noteFilePath(userDataDir, index, index.activeId) : ''
 }
 const statusText = (page) => page.evaluate(`document.querySelector('#save-status')?.textContent ?? ''`)
 const editorValue = (page) => page.evaluate(`document.getElementById('note-editor').value`)
@@ -551,10 +552,81 @@ async function main() {
     renamed.notes.find((note) => note.id === firstNoteId)?.title === '工作笔记',
     JSON.stringify(renamed.notes.map((note) => note.title))
   )
+  const renamedMeta = renamed.notes.find((note) => note.id === firstNoteId)
   record(
     '改名不影响正文与文件 id',
     (readNoteById(userDataDir, firstNoteId) ?? '') === firstNoteContent && renamed.activeId === firstNoteId
   )
+  // 文件名跟着标签走：改标签 = 改文件名
+  record(
+    '改名后磁盘上的文件名就是标签名',
+    renamedMeta?.file === '工作笔记.md' &&
+      existsSync(path.join(userDataDir, 'notes', '工作笔记.md')) &&
+      !existsSync(path.join(userDataDir, 'notes', `${firstNoteId}.md`)),
+    String(renamedMeta?.file)
+  )
+  const createdMeta = afterCreate.notes.find((note) => note.id === secondNoteId)
+  record(
+    '新建笔记的文件名也是标签名',
+    typeof createdMeta?.file === 'string' && existsSync(path.join(userDataDir, 'notes', createdMeta.file)),
+    String(createdMeta?.file)
+  )
+
+  // 同名标签：标签允许重复，文件名自动加序号
+  const duplicated = await page.evaluate(`window.edgeNotes.renameNote('${secondNoteId}', '工作笔记')`)
+  await delay(250)
+  const dupMeta = duplicated.notes.find((note) => note.id === secondNoteId)
+  const firstAfterDup = duplicated.notes.find((note) => note.id === firstNoteId)
+  record(
+    '同名标签的文件自动加 (2)，不会互相覆盖',
+    dupMeta?.file === '工作笔记 (2).md' && firstAfterDup?.file === '工作笔记.md',
+    `${firstAfterDup?.file} / ${dupMeta?.file}`
+  )
+  record(
+    '同名时两篇正文各自独立落盘',
+    (readNoteById(userDataDir, firstNoteId) ?? '') === firstNoteContent &&
+      (readNoteById(userDataDir, secondNoteId) ?? '').includes('第二篇的内容')
+  )
+
+  // 非法字符：标签照旧显示，文件名做替换（Windows 不允许这些字符）
+  const sanitized = await page.evaluate(`window.edgeNotes.renameNote('${secondNoteId}', '工作/笔记:2?')`)
+  await delay(250)
+  const sanitizedMeta = sanitized.notes.find((note) => note.id === secondNoteId)
+  record(
+    '标签里的非法字符在文件名里被替换掉',
+    sanitizedMeta?.file === '工作-笔记-2-.md' &&
+      existsSync(path.join(userDataDir, 'notes', '工作-笔记-2-.md')) &&
+      sanitizedMeta?.title === '工作/笔记:2?',
+    `${sanitizedMeta?.title} → ${sanitizedMeta?.file}`
+  )
+  await page.evaluate(`document.getElementById('note-row-${secondNoteId}').click()`)
+  await delay(250)
+  await page.evaluate(`document.getElementById('note-editor').focus()`)
+  await page.insertText('改名后再写一句')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 6000, '改名后保存')
+  const afterSanitizedSave = readNoteById(userDataDir, secondNoteId) ?? ''
+  record(
+    '改名后紧接着写内容仍然写进新文件',
+    afterSanitizedSave.includes('改名后再写一句') && afterSanitizedSave.includes('第二篇的内容'),
+    `${afterSanitizedSave.length} 字`
+  )
+  // 还原成普通标签，后面的断言继续用
+  const restored = await page.evaluate(`window.edgeNotes.renameNote('${secondNoteId}', '第二篇')`)
+  await delay(250)
+  record(
+    '再次改名会跟着改名（不留下旧文件）',
+    restored.notes.find((note) => note.id === secondNoteId)?.file === '第二篇.md' &&
+      !existsSync(path.join(userDataDir, 'notes', '工作-笔记-2-.md'))
+  )
+  // 回到第一篇，后面的断言仍然以第一篇为活动笔记
+  await page.evaluate(`document.getElementById('note-row-${firstNoteId}').click()`)
+  await waitFor(
+    page,
+    `document.querySelector('.noteRow--active')?.getAttribute('data-note-id') === '${firstNoteId}'`,
+    4000,
+    '切回第一篇'
+  )
+  await delay(250)
 
   // 拖动调整顺序（在行上按下 → 向下移过一行 → 松手）
   const orderBefore = (await page.evaluate('window.edgeNotes.listNotes()')).notes.map((note) => note.id)
@@ -636,6 +708,8 @@ async function main() {
     (await page.evaluate('window.edgeNotes.listNotes()')).notes.length === 2
   )
 
+  // 删除前先记下这篇笔记的真实文件路径（文件名是标签，不是 id）
+  const secondNoteFile = noteFilePath(userDataDir, readNotesIndex(userDataDir), secondNoteId)
   await page.evaluate(`document.querySelector('#note-row-${secondNoteId} .noteRow__del').click()`)
   await waitFor(page, `document.getElementById('note-delete-confirm') !== null`, 3000, '再次确认删除')
   await page.evaluate(`document.getElementById('note-delete-confirm').click()`)
@@ -647,7 +721,15 @@ async function main() {
     afterDelete.notes.length === 1 && afterDelete.activeId === firstNoteId,
     JSON.stringify(afterDelete.notes.map((note) => note.title))
   )
-  record('被删除的笔记文件已移出目录', !existsSync(path.join(userDataDir, 'notes', `${secondNoteId}.md`)))
+  // 进回收站是异步的（文件越大越慢），固定等待不可靠，改成轮询
+  let trashGone = false
+  for (let attempt = 0; attempt < 25 && !trashGone; attempt += 1) {
+    trashGone = !existsSync(secondNoteFile)
+    if (!trashGone) {
+      await delay(200)
+    }
+  }
+  record('被删除的笔记文件已移出目录', trashGone, path.basename(secondNoteFile))
   record('增删改之后原笔记内容未受影响', (await editorValue(page)) === firstNoteContent)
 
   // ------------------------------------------------------------ 清空 + 取消

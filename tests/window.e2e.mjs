@@ -496,6 +496,49 @@ async function main() {
     record('关闭置顶后的 Z 序对比（验证窗口未能切到前台，跳过）', true, focusInfo)
   }
 
+  // 关闭置顶 + 面板收起 + 普通窗口在前时，鼠标贴边展开必须"看得见"（moveTop 抬 Z 序）
+  await clickAndWait(page, 'toggle-pinned', (state) => state.settings.pinnedOpen === false)
+  const collapsedForRaise = await waitCollapsed(page)
+  ps('dialog-focus', '-TargetPid', String(dialogPid))
+  const zorderBeforeRaise = zorder()
+  const expandedForRaise = await expandByHover(page, workRightPx, workMidPx)
+  const zorderAfterRaise = zorder()
+  const panelHasFocus = await page.evaluate('document.hasFocus()')
+  record(
+    '贴边展开前面板被普通窗口压住（复现"划到右边找不到"）',
+    collapsedForRaise.runtime.phase === 'collapsed' && zorderBeforeRaise.panel > zorderBeforeRaise.other,
+    `${collapsedForRaise.runtime.phase} ${zorderBeforeRaise.output}`
+  )
+  record(
+    '贴边展开后把面板抬到普通窗口之上',
+    expandedForRaise.runtime.phase === 'expanded' && zorderAfterRaise.panel < zorderAfterRaise.other,
+    zorderAfterRaise.output
+  )
+  record('抬 Z 序时没有抢走键盘焦点', panelHasFocus === false, `hasFocus=${panelHasFocus}`)
+  await clickAndWait(page, 'toggle-pinned', (state) => state.settings.pinnedOpen === true)
+
+  // 用户去点浏览器（别的窗口抢到前台）后，展开中的面板会被压到下层；
+  // 指针回到面板上就应该自动抬回来，而不是必须等它收起再重新贴边
+  ps('dialog-focus', '-TargetPid', String(dialogPid))
+  const zorderCovered = zorder()
+  const recoverFrom = readLog(logFile).length
+  ps('move', '-X', String(workRightPx - 60), '-Y', String(workMidPx), '-Wait', '900')
+  const zorderRecovered = zorder()
+  const recoverRecords = readLog(logFile).slice(recoverFrom)
+  const focusAfterRecover = await page.evaluate('document.hasFocus()')
+  record(
+    '别的窗口抢到前台后，展开中的面板确实被压到下层',
+    zorderCovered.panel > zorderCovered.other,
+    zorderCovered.output
+  )
+  record(
+    '指针回到面板上就把面板重新抬到最前（不用先收起再展开）',
+    zorderRecovered.panel < zorderRecovered.other &&
+      recoverRecords.some((item) => item.event === 'panel-re-raised'),
+    zorderRecovered.output
+  )
+  record('重新抬层同样不抢键盘焦点', focusAfterRecover === false, `hasFocus=${focusAfterRecover}`)
+
   await clickAndWait(page, 'toggle-always-on-top', (state) => state.settings.alwaysOnTop === true)
   ps('dialog-focus', '-TargetPid', String(dialogPid))
   const zorderBack = zorder()

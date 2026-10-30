@@ -1,7 +1,8 @@
 // 第 06 轮：Windows 桌面集成验证（系统托盘 / 隐藏与退出 / 开机启动 / 二次启动唤出）
 // 用法：npm run build && node tests/desktop.e2e.mjs
+import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { connectPage } from './lib/cdp.mjs'
@@ -13,6 +14,7 @@ import {
   ensureBuild,
   expandByHover,
   launchApp,
+  noteFilePath,
   ps,
   quitApp,
   readActiveNote,
@@ -56,9 +58,10 @@ async function main() {
     const trayMenu = records.filter((item) => item.event === 'tray-menu-built').at(-1)
     record('托盘图标创建成功且图标非空', Boolean(trayCreated) && trayCreated.empty === false, JSON.stringify(trayCreated?.size ?? null))
     record(
-      '托盘菜单包含显示/隐藏、固定展开、设置、退出',
+      '托盘菜单包含唤出/隐藏、固定展开、设置、退出',
       Boolean(trayMenu) &&
-        trayMenu.items.includes('隐藏笔记栏') &&
+        (trayMenu.items.includes('唤出笔记栏') || trayMenu.items.includes('显示笔记栏')) &&
+        trayMenu.items.includes('隐藏到托盘') &&
         trayMenu.items.includes('固定展开') &&
         trayMenu.items.includes('设置…') &&
         trayMenu.items.includes('退出 Edge Notes'),
@@ -81,20 +84,47 @@ async function main() {
     const hideRecords = readLog(logFile).slice(hideFrom)
     record('隐藏动作有日志可追溯', hideRecords.some((item) => item.event === 'hidden-changed' && item.hidden === true))
 
-    // 隐藏期间贴屏幕边缘不应唤出，否则"隐藏"没有意义
-    const idleFrom = readLog(logFile).length
-    ps('move', '-X', String(edgeX), '-Y', String(midY), '-Wait', '1600')
-    const idleState = await page.evaluate('window.edgeNotes.getState()')
-    const idleRecords = readLog(logFile).slice(idleFrom)
-    record('隐藏期间鼠标贴边不会唤出面板', idleState.runtime.hidden === true && idleState.runtime.phase === 'collapsed', idleState.runtime.phase)
-    record('隐藏期间没有产生展开事件', !idleRecords.some((item) => item.event === 'expand-start'))
-
     // 隐藏不丢内容：既要内存里有，也要真的落盘
     const noteWhileHidden = await page.evaluate('window.edgeNotes.getNote()')
     await delay(900)
     const onDisk = readActiveNote(userDataDir) ?? ''
     record('隐藏期间内容仍在内存', noteWhileHidden.content.includes('隐藏到托盘前的测试内容'), `${noteWhileHidden.content.length} 字`)
     record('隐藏期间内容已落盘', onDisk.includes('隐藏到托盘前的测试内容'), `${onDisk.length} 字`)
+
+    // 全局快捷键召回：发真实键盘事件（系统级 RegisterHotKey，不要求窗口在前台）
+    ps('move', '-X', '200', '-Y', '300', '-Wait', '700')
+    const hotkeyFrom = readLog(logFile).length
+    ps('hotkey-wake')
+    const hotkeyState = await waitState(page, (state) => state.runtime.hidden === false, 6000)
+    const hotkeyRecords = readLog(logFile).slice(hotkeyFrom)
+    record('按 Ctrl+Alt+N 可以从隐藏态唤出面板', hotkeyState.runtime.hidden === false, hotkeyState.runtime.phase)
+    record(
+      '快捷键唤出的原因被如实记录',
+      hotkeyRecords.some((item) => item.event === 'expand-start' && item.reason === 'shortcut'),
+      String(hotkeyRecords.find((item) => item.event === 'expand-start')?.reason)
+    )
+
+    await page.evaluate('window.edgeNotes.setHidden(true)')
+    await waitState(page, (state) => state.runtime.hidden === true, 4000)
+
+    // 隐藏后必须还能被召回：鼠标贴屏幕边缘即可，不能把用户逼成"只能去点托盘图标"
+    // 先把指针移开（否则"刚藏起来就又弹回来"），再贴回边缘
+    ps('move', '-X', '200', '-Y', '300', '-Wait', '800')
+    const wakeFrom = readLog(logFile).length
+    const wokeState = await expandByHover(page, edgeX, midY)
+    const wakeRecords = readLog(logFile).slice(wakeFrom)
+    record('隐藏后鼠标贴边可以召回面板', wokeState.runtime.hidden === false, wokeState.runtime.phase)
+    record('召回走的是滑出动画，而不是瞬移', wakeRecords.some((item) => item.event === 'expand-start'))
+    record(
+      '展开时把面板抬到最前（moveTop，不抢键盘焦点）',
+      wakeRecords.some((item) => item.event === 'panel-raised'),
+      String(wakeRecords.find((item) => item.event === 'panel-raised')?.alwaysOnTop)
+    )
+    record(
+      '全局唤出快捷键已注册',
+      typeof wokeState.runtime.wakeShortcut === 'string' && wokeState.runtime.wakeShortcut.length > 0,
+      String(wokeState.runtime.wakeShortcut)
+    )
 
     // ------------------------- 二-2、系统关闭（Alt+F4 / WM_CLOSE）也只隐藏
     await page.evaluate('window.edgeNotes.setHidden(false)')
@@ -117,33 +147,115 @@ async function main() {
     record('恢复后自动收起逻辑未被破坏', collapsedAfterRestore.runtime.phase === 'collapsed', collapsedAfterRestore.runtime.phase)
     await page.captureScreenshot(path.join(shotsDir, '01-restored.png'))
 
-    // ------------------------------------------------------ 四、开机启动
-    // 未打包时 Windows 启动项不可用（实测 Electron 回读与注册表不一致），应用必须如实报告"不支持"
-    const loginBefore = await page.evaluate('window.edgeNotes.getLoginItemState()')
-    record(
-      '未打包时明确报告开机启动不可用',
-      loginBefore.supported === false && typeof loginBefore.enabled === 'boolean' && typeof loginBefore.active === 'boolean',
-      JSON.stringify(loginBefore)
+    // ------------------------------------ 四、开机启动（「启动」文件夹快捷方式）
+    // 不再写注册表 Run：安全软件会把 Run 里的 electron.exe 当成可疑自启反复弹窗（用户真实反馈）。
+    // 断言必须直接看「启动」文件夹里的 .lnk 以及它指向的目标程序，而不是只看回读。
+    const RUN_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'
+    const AUTOSTART_NAME = 'Edge Notes Desktop'
+    const startupDir = path.join(
+      process.env.APPDATA ?? '',
+      'Microsoft',
+      'Windows',
+      'Start Menu',
+      'Programs',
+      'Startup'
     )
-    record(
-      '不可用时给出可读原因（不伪造成功）',
-      typeof loginBefore.message === 'string' && /开发模式|打包/.test(loginBefore.message),
-      String(loginBefore.message)
-    )
-
-    let loginError = null
-    try {
-      await page.evaluate('window.edgeNotes.setLaunchAtLogin(true)')
-    } catch (error) {
-      loginError = error instanceof Error ? error.message : String(error)
+    const lnkPath = path.join(startupDir, 'Edge Notes Desktop.lnk')
+    const lnkBackup = `${lnkPath}.test-backup`
+    rmSync(lnkBackup, { force: true })
+    const hadLnk = existsSync(lnkPath)
+    if (hadLnk) {
+      renameSync(lnkPath, lnkBackup)
     }
-    record('尝试开启会被拒绝并说明原因', loginError !== null && /开发模式|打包/.test(loginError), String(loginError).slice(0, 60))
+    const regQuery = (name) => {
+      const result = spawnSync('reg', ['query', RUN_KEY, '/v', name], { encoding: 'utf8' })
+      return result.status === 0 ? result.stdout : ''
+    }
+    const shortcutTarget = () => {
+      if (!existsSync(lnkPath)) {
+        return ''
+      }
+      const result = spawnSync(
+        'powershell',
+        ['-NoProfile', '-Command', `(New-Object -ComObject WScript.Shell).CreateShortcut('${lnkPath}').TargetPath`],
+        { encoding: 'utf8' }
+      )
+      return (result.stdout ?? '').trim()
+    }
 
-    const afterLoginAttempt = await page.evaluate('window.edgeNotes.getState()')
+    try {
+      const loginBefore = await page.evaluate('window.edgeNotes.getLoginItemState()')
+      record('开发模式也报告开机启动可用（不再是"不支持"）', loginBefore.supported === true, JSON.stringify(loginBefore))
+      record(
+        '「启动」文件夹里没有快捷方式时如实报告未开启',
+        loginBefore.enabled === false && loginBefore.active === false,
+        `enabled=${loginBefore.enabled} active=${loginBefore.active}`
+      )
+
+      const enabledState = await page.evaluate('window.edgeNotes.setLaunchAtLogin(true)')
+      const target = shortcutTarget()
+      record(
+        '开启后设置文件同步为已开启',
+        enabledState.settings.launchAtLogin === true,
+        String(enabledState.settings.launchAtLogin)
+      )
+      record('开启后「启动」文件夹里真实存在快捷方式', existsSync(lnkPath), lnkPath)
+      record('快捷方式指向真实的 electron.exe（登录后确实能启动）', /electron\.exe$/i.test(target), target)
+      record(
+        '不再往注册表 Run 里写启动项（安全软件弹窗的源头）',
+        regQuery(AUTOSTART_NAME) === '',
+        regQuery(AUTOSTART_NAME).slice(0, 80)
+      )
+      const loginEnabled = await page.evaluate('window.edgeNotes.getLoginItemState()')
+      record(
+        '回读为已启用且系统会真的启动它',
+        loginEnabled.enabled === true && loginEnabled.active === true,
+        JSON.stringify(loginEnabled)
+      )
+
+      const disabledState = await page.evaluate('window.edgeNotes.setLaunchAtLogin(false)')
+      record(
+        '关闭后设置文件同步为已关闭',
+        disabledState.settings.launchAtLogin === false,
+        String(disabledState.settings.launchAtLogin)
+      )
+      record('关闭后「启动」文件夹里的快捷方式被移除', !existsSync(lnkPath), lnkPath)
+      const loginAfter = await page.evaluate('window.edgeNotes.getLoginItemState()')
+      record('关闭后回读为未启用', loginAfter.enabled === false && loginAfter.active === false, JSON.stringify(loginAfter))
+    } finally {
+      // 测试机器上可能本来就装着带自启的正式版：跑完必须还原，绝不留给用户
+      await page.evaluate('window.edgeNotes.setLaunchAtLogin(false)').catch(() => undefined)
+      rmSync(lnkPath, { force: true })
+      if (hadLnk) {
+        renameSync(lnkBackup, lnkPath)
+      }
+      rmSync(lnkBackup, { force: true })
+    }
+
+    // ------------------------------------------- 四-2、笔记文件位置（快速查找打开）
+    const notesInfo = await page.evaluate('window.edgeNotes.getNotesInfo()')
+    const activeIndex = readNotesIndex(userDataDir)
+    const expectedNoteFile = noteFilePath(userDataDir, activeIndex, activeIndex?.activeId)
     record(
-      '被拒绝后不会留下假的"已开启"',
-      afterLoginAttempt.settings.launchAtLogin === false,
-      String(afterLoginAttempt.settings.launchAtLogin)
+      '能查到笔记目录与当前笔记文件',
+      path.resolve(notesInfo.dir) === path.resolve(path.join(userDataDir, 'notes')) &&
+        path.resolve(notesInfo.activeFile) === path.resolve(expectedNoteFile),
+      notesInfo.dir
+    )
+    record(
+      '笔记文件名就是标签名（不是内部 id）',
+      path.basename(notesInfo.activeFile) === activeIndex?.notes?.find((note) => note.id === activeIndex.activeId)?.file,
+      path.basename(notesInfo.activeFile)
+    )
+    record(
+      '当前笔记文件真实存在（可直接用记事本打开）',
+      existsSync(notesInfo.activeFile) && notesInfo.count >= 1,
+      `${notesInfo.count} 篇 · ${notesInfo.activeFile}`
+    )
+    record(
+      '索引文件位置也一并返回',
+      path.resolve(notesInfo.indexFile) === path.resolve(path.join(userDataDir, 'notes-index.json')),
+      notesInfo.indexFile
     )
 
     // --------------------------------------- 五、二次启动唤出（含隐藏态）
@@ -165,6 +277,16 @@ async function main() {
     await page.evaluate(`document.getElementById('open-settings').click()`)
     await waitFor(page, `document.getElementById('quit-app') !== null`, 3000, '设置里有退出入口')
     record('设置面板提供明确的退出入口', (await page.evaluate(`!!document.getElementById('quit-app')`)) === true)
+    record(
+      '设置里提供笔记文件「打开 / 定位」入口',
+      (await page.evaluate(
+        `!!(document.getElementById('open-notes-folder') && document.getElementById('reveal-active-note'))`
+      )) === true
+    )
+    const notesPathText = await page.evaluate(`document.getElementById('notes-path')?.textContent ?? ''`)
+    record('设置里显示当前笔记文件名与篇数', /\.md · 共 \d+ 篇/.test(notesPathText), notesPathText)
+    const wakeShortcutText = await page.evaluate(`document.getElementById('wake-shortcut')?.textContent ?? ''`)
+    record('设置里显示快速唤出快捷键', /Ctrl\+Alt\+/.test(wakeShortcutText), wakeShortcutText)
 
     const quitFrom = readLog(logFile).length
     await page.evaluate(`document.getElementById('quit-app').click()`)
@@ -213,7 +335,7 @@ async function main() {
       const migrated = await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(migrateTarget)})`)
       const targetIndex = readNotesIndex(migrateTarget)
       const targetNotePath = targetIndex?.activeId
-        ? path.join(migrateTarget, 'notes', `${targetIndex.activeId}.md`)
+        ? noteFilePath(migrateTarget, targetIndex, targetIndex.activeId)
         : path.join(migrateTarget, 'notes', 'missing.md')
       const noteInTarget = targetNotePath
       const settingsInTarget = path.join(migrateTarget, 'edge-notes-settings.json')
@@ -232,7 +354,7 @@ async function main() {
       const sha = (filePath) => createHash('sha256').update(readFileSync(filePath)).digest('hex')
       const sourceIndex = readNotesIndex(userDataDir)
       const pairs = [
-        [path.join('notes', `${sourceIndex.activeId}.md`)],
+        [path.join('notes', path.basename(noteFilePath(userDataDir, sourceIndex, sourceIndex.activeId)))],
         ['notes-index.json'],
         ['edge-notes-settings.json'],
         [path.join('attachments', 'probe.png')]

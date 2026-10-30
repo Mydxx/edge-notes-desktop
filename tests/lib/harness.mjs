@@ -161,19 +161,28 @@ export function readNotesIndex(userDataDir) {
   }
 }
 
+/**
+ * 笔记在磁盘上的真实文件：文件名跟着标签走，索引里记的是 `file`，
+ * 老数据没有该字段才回落到 `<id>.md`。
+ */
+export function noteFilePath(userDataDir, index, id) {
+  const meta = index?.notes?.find((note) => note.id === id)
+  return path.join(userDataDir, 'notes', meta?.file ?? `${id}.md`)
+}
+
 /** 读当前活动笔记的正文 */
 export function readActiveNote(userDataDir) {
   const index = readNotesIndex(userDataDir)
   if (!index?.activeId) {
     return null
   }
-  const filePath = path.join(userDataDir, 'notes', `${index.activeId}.md`)
+  const filePath = noteFilePath(userDataDir, index, index.activeId)
   return existsSync(filePath) ? readFileSync(filePath, 'utf8') : null
 }
 
 /** 按 id 读某一篇笔记的正文 */
 export function readNoteById(userDataDir, id) {
-  const filePath = path.join(userDataDir, 'notes', `${id}.md`)
+  const filePath = noteFilePath(userDataDir, readNotesIndex(userDataDir), id)
   return existsSync(filePath) ? readFileSync(filePath, 'utf8') : null
 }
 
@@ -184,7 +193,7 @@ export function readNoteByTitle(userDataDir, title) {
   if (!meta) {
     return null
   }
-  const filePath = path.join(userDataDir, 'notes', `${meta.id}.md`)
+  const filePath = noteFilePath(userDataDir, index, meta.id)
   return existsSync(filePath) ? readFileSync(filePath, 'utf8') : null
 }
 

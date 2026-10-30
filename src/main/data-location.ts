@@ -129,6 +129,24 @@ export function resolveUserDataDir(): void {
     return
   }
 
+  // 便携版优先于指针文件：electron-builder 的 portable 目标会注入原始 exe 所在目录，
+  // 数据就放在它旁边，U 盘拔走整套数据一起走（否则会读到本机 %APPDATA% 里的旧指针）
+  const portableDir = process.env.PORTABLE_EXECUTABLE_DIR
+  if (portableDir && existsSync(portableDir)) {
+    const portableDataDir = path.join(portableDir, 'Edge Notes Data')
+    try {
+      mkdirSync(portableDataDir, { recursive: true })
+      app.setPath('userData', portableDataDir)
+      log('data-dir-selected', { source: 'portable', dir: portableDataDir })
+      return
+    } catch (error) {
+      log('data-dir-portable-failed', {
+        dir: portableDataDir,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    }
+  }
+
   // --user-data-dir 会被 Chromium 从 argv 里吃掉，只能看 userData 是否已被改写来判断"是否外部指定"
   const pointerOverride = process.env.EDGE_NOTES_POINTER
   if (!pointerOverride && !isDefaultUserData()) {

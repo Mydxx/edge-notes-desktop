@@ -8,6 +8,7 @@ import type {
   EdgeNotesState,
   LoginItemState,
   NoteMeta,
+  NotesFilesInfo,
   NotesIndexState,
   NoteSnapshot,
   NoteStatus,
@@ -111,6 +112,7 @@ export default function App() {
   const [contentVersion, setContentVersion] = useState(0)
   const [attachError, setAttachError] = useState<string | null>(null)
   const [attachmentsInfo, setAttachmentsInfo] = useState<{ dir: string; count: number; bytes: number } | null>(null)
+  const [notesInfo, setNotesInfo] = useState<NotesFilesInfo | null>(null)
   const [prune, setPrune] = useState<{ count: number; bytes: number; relatives: string[] } | null>(null)
   const [notes, setNotes] = useState<NotesIndexState | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
@@ -282,10 +284,18 @@ export default function App() {
         }
       })
       .catch(() => undefined)
+    window.edgeNotes
+      .getNotesInfo()
+      .then((info) => {
+        if (alive) {
+          setNotesInfo(info)
+        }
+      })
+      .catch(() => undefined)
     return () => {
       alive = false
     }
-  }, [settingsOpen])
+  }, [settingsOpen, notes?.notes.length, notes?.activeId])
 
   // 开机启动以系统回读为准，每次设置变化后刷新
   useEffect(() => {
@@ -874,6 +884,10 @@ export default function App() {
   const navCollapsed = (settings?.navCollapsed ?? false) || navAutoCollapsed
   const alwaysOnTop = settings?.alwaysOnTop ?? false
   const pinnedOpen = settings?.pinnedOpen ?? false
+  // Electron 的加速键写法对用户不友好：Control+Alt+N → Ctrl+Alt+N
+  const wakeShortcutLabel = state?.runtime.wakeShortcut
+    ? state.runtime.wakeShortcut.replace('Control', 'Ctrl')
+    : '未注册（快捷键被占用）'
 
   const statusLabel =
     status.state === 'saving' ? '保存中' : status.state === 'error' ? '保存失败' : status.savedAt ? '已保存' : ''
@@ -1193,6 +1207,16 @@ export default function App() {
               启动项已写入，但被 Windows「启动应用」禁用，登录后不会自动启动。
             </p>
           ) : null}
+          {loginItem?.message && !(loginItem.enabled && !loginItem.active) ? (
+            <p className="settings__hint">{loginItem.message}</p>
+          ) : null}
+
+          <div className="settings__row">
+            <span className="settings__label">快速唤出</span>
+            <span className="settings__value" id="wake-shortcut">
+              {wakeShortcutLabel}
+            </span>
+          </div>
 
           <div className="settings__row">
             <span className="settings__label">数据目录</span>
@@ -1204,6 +1228,42 @@ export default function App() {
             <p className="settings__path" title={dataDir.current}>
               {dataDir.current}
               {dataDir.isDefault ? '（默认）' : ''}
+            </p>
+          ) : null}
+          <div className="settings__row">
+            <span className="settings__label">笔记文件</span>
+            <span className="settings__actions">
+              <button
+                id="open-notes-folder"
+                type="button"
+                className="switchBtn"
+                title="在资源管理器里打开 notes 目录（每篇笔记一个 .md，可用记事本打开）"
+                onClick={() => {
+                  void window.edgeNotes
+                    .openNotesFolder()
+                    .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
+                }}
+              >
+                打开
+              </button>
+              <button
+                id="reveal-active-note"
+                type="button"
+                className="switchBtn"
+                title="在资源管理器里选中当前这篇笔记的 .md 文件"
+                onClick={() => {
+                  void window.edgeNotes
+                    .revealActiveNote()
+                    .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
+                }}
+              >
+                定位
+              </button>
+            </span>
+          </div>
+          {notesInfo ? (
+            <p className="settings__path" id="notes-path" title={notesInfo.activeFile}>
+              {notesInfo.activeFile.split(/[\\/]/).pop()} · 共 {notesInfo.count} 篇
             </p>
           ) : null}
           <div className="settings__row">
@@ -1240,7 +1300,9 @@ export default function App() {
           ) : null}
           {notice ? <p className="settings__hint">{notice}</p> : null}
 
-          <p className="settings__hint">拖动面板内侧边缘可调整宽度；Esc 关闭本面板。</p>
+          <p className="settings__hint">
+            拖动面板内侧边缘可调整宽度；隐藏后鼠标贴屏幕边缘、单击托盘图标或按 {wakeShortcutLabel} 都能召回。
+          </p>
 
           <div className="settings__footer">
             <button id="quit-app" type="button" className="textBtn textBtn--quiet" title="退出应用（会先保存笔记）" onClick={() => void window.edgeNotes.quit()}>
@@ -1369,7 +1431,7 @@ export default function App() {
           type="button"
           className="iconBtn iconBtn--sm"
           aria-label="隐藏到托盘"
-          title="隐藏到托盘（托盘菜单或设置里可退出）"
+          title={`隐藏到托盘（鼠标贴屏幕边缘或按 ${wakeShortcutLabel} 可召回）`}
           onClick={() => {
             void window.edgeNotes.setHidden(true)
           }}

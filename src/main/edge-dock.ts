@@ -20,6 +20,11 @@ const HIT_TOLERANCE_PX = 2
  * 留一点余量可以避免「刚松手面板就收起」这种讨厌的行为。
  */
 const PANEL_HIT_SLOP = 6
+/**
+ * 重新抬层的最小间隔。抬层在"未置顶"时会短暂切换一次置顶状态，
+ * 鼠标在面板上来回移动时如果每 60ms 抬一次，看起来就是窗口在闪。
+ */
+const RAISE_THROTTLE_MS = 600
 
 interface DockGeometry {
   displayId: number
@@ -54,8 +59,18 @@ export class EdgeDock {
   private editorFocused = false
   /** 是否正在拖动调整宽度：拖动期间不收起，避免面板在手里消失 */
   private resizing = false
-  /** 是否隐藏到托盘：隐藏期间窗口整体不可见，鼠标贴边也不再唤出 */
+  /** 是否隐藏到托盘：窗口整体不可见，但鼠标贴边仍可召回 */
   private hidden = false
+  /**
+   * 隐藏后是否已经"离开过触发条"。
+   * 用户在屏幕边缘按 Alt+F4 / 点隐藏时，指针本来就停在触发条上，
+   * 不加这个门闩就会"刚藏起来立刻被自己的鼠标叫回来"。
+   */
+  private hoverWakeArmed = false
+  /** 上一次轮询到的指针位置：用来判断"用户在动鼠标"，静态悬停不会反复抬层 */
+  private lastCursor: Point = { x: Number.NaN, y: Number.NaN }
+  /** 上次抬层时间：抬层会短暂切换置顶状态，必须限流，否则会闪 */
+  private lastRaiseAt = 0
   private pollTimer: NodeJS.Timeout | null = null
   private collapseTimer: NodeJS.Timeout | null = null
   private frameTimer: NodeJS.Timeout | null = null
@@ -83,10 +98,14 @@ export class EdgeDock {
       return
     }
     if (this.hidden) {
-      this.setHidden(false)
+      // 把唤出原因带下去，日志里才分得清"托盘 / 快捷键 / 二次启动"
+      this.setHidden(false, reason)
       return
     }
     if (this.phase === 'expanded' || this.phase === 'expanding') {
+      // 已经展开但可能被浏览器盖住：唤出动作一律把它抬到最前，而不是什么都不做
+      this.raise()
+      log('panel-raised-by-wake', { reason, phase: this.phase })
       return
     }
     this.expand(reason)
@@ -97,7 +116,7 @@ export class EdgeDock {
    * 隐藏与"收起"是两件事：收起仍留有 4px 触发条（鼠标一碰就回），
    * 隐藏则把窗口整个藏起来，鼠标贴边也不会唤出，只能从托盘恢复。
    */
-  setHidden(hidden: boolean): void {
+  setHidden(hidden: boolean, wakeReason = 'tray-show'): void {
     if (this.disposed || this.hidden === hidden) {
       return
     }
@@ -110,10 +129,13 @@ export class EdgeDock {
       this.x = this.geometry.collapsedX
       this.applyBounds(true)
       this.win.hide()
-      log('hidden-changed', { hidden, phase: this.phase })
+      // 指针若还停在触发条上，必须先移开再回来才算"主动召回"
+      this.hoverWakeArmed = !this.hitTestTrigger(screen.getCursorScreenPoint())
+      log('hidden-changed', { hidden, phase: this.phase, hoverWakeArmed: this.hoverWakeArmed })
       this.hooks.onPhaseChange(this.phase)
       return
     }
+    this.hoverWakeArmed = false
 
     this.geometry = this.computeGeometry()
     this.phase = 'collapsed'
@@ -122,8 +144,8 @@ export class EdgeDock {
     this.win.showInactive()
     log('hidden-changed', { hidden, phase: this.phase })
     this.hooks.onPhaseChange(this.phase)
-    // 从托盘恢复后直接滑出，用户能立刻确认"它回来了"，随后照常按延迟收起
-    this.expand('tray-show')
+    // 从托盘/快捷键恢复后直接滑出，用户能立刻确认"它回来了"，随后照常按延迟收起
+    this.expand(wakeReason)
   }
 
   /** 定位到初始位置、显示窗口并开始监听鼠标 */
@@ -278,11 +300,29 @@ export class EdgeDock {
     if (this.disposed || this.win.isDestroyed()) {
       return
     }
-    // 隐藏到托盘期间不做任何鼠标响应，否则"隐藏"会被贴边动作立刻破坏
+    const point = screen.getCursorScreenPoint()
+    const moved = point.x !== this.lastCursor.x || point.y !== this.lastCursor.y
+    this.lastCursor = point
+    // 隐藏后鼠标贴边仍然可以召回：隐藏只是"完全离开可见区"，
+    // 不能因此把用户逼成"必须去点托盘图标"（那是真实的体验抱怨）。
     if (this.hidden) {
+      if (this.hitTestTrigger(point)) {
+        if (this.hoverWakeArmed) {
+          log('hidden-wake', { reason: 'trigger-hover' })
+          this.setHidden(false)
+        }
+        return
+      }
+      if (!this.hoverWakeArmed) {
+        this.hoverWakeArmed = true
+        log('hidden-wake-armed', {})
+      }
       return
     }
-    const point = screen.getCursorScreenPoint()
+
+    // 面板已经展开、但用户去点了浏览器/别的窗口 → 它会被压到下层。
+    // 指针一回到面板上就重新抬起来，"随时可唤"才对。
+    this.maybeReRaise(point, moved)
 
     // 固定展开 / 编辑器聚焦 / 正在拖动宽度时，鼠标离开也不收起
     if (this.settings.pinnedOpen || this.editorFocused || this.resizing) {
@@ -316,6 +356,27 @@ export class EdgeDock {
         }
         break
     }
+  }
+
+  /**
+   * 已展开却被压到下层（用户点了浏览器）时，指针回到面板上就把它抬回来。
+   * 只在指针真的移动时触发：静态悬停不反复抬层，避免窗口在眼前闪。
+   */
+  private maybeReRaise(point: Point, moved: boolean): void {
+    if (!moved || this.disposed || this.win.isDestroyed()) {
+      return
+    }
+    if (this.phase !== 'expanded' && this.phase !== 'expanding') {
+      return
+    }
+    if (!this.hitTestPanel(point) || this.win.isFocused()) {
+      return
+    }
+    if (Date.now() - this.lastRaiseAt < RAISE_THROTTLE_MS) {
+      return
+    }
+    this.raise()
+    log('panel-re-raised', { reason: 'pointer-over-covered-panel', phase: this.phase })
   }
 
   private hitTestTrigger(point: Point): boolean {
@@ -360,6 +421,9 @@ export class EdgeDock {
       return
     }
     this.clearCollapseTimer()
+    // 展开一定看得见：置顶开关关掉、浏览器最大化时，面板原本会被压在下面，
+    // 表现就是"鼠标划到右边缘什么也没有"。moveTop 只抬 Z 序，不抢键盘焦点。
+    this.raise()
     this.phase = 'expanding'
     log('expand-start', {
       reason,
@@ -440,6 +504,31 @@ export class EdgeDock {
       clearTimeout(this.frameTimer)
       this.frameTimer = null
     }
+  }
+
+  /**
+   * 把面板抬到其它窗口之上，但不抢焦点（moveTop 等价于 SetWindowPos 的 HWND_TOP，
+   * 不调用 SetForegroundWindow）。这样用户正在浏览器里打字时，鼠标贴边也能看见面板。
+   */
+  private raise(): void {
+    if (this.disposed || this.win.isDestroyed()) {
+      return
+    }
+    if (!this.win.isVisible()) {
+      this.win.showInactive()
+    }
+    if (this.settings.alwaysOnTop) {
+      // 已经是置顶窗口，moveTop 只是在本层里排到最前
+      this.win.moveTop()
+    } else {
+      // 未置顶时 moveTop 会被前台窗口的激活顺序压回去（实测系统 Z 序仍是面板在下），
+      // 改为"瞬间置顶再取消"：HWND_NOTOPMOST 会把窗口放到普通窗口层的最上面，
+      // 同时不抢键盘焦点（不会把用户正在打的字抢过来）。
+      this.win.setAlwaysOnTop(true)
+      this.win.setAlwaysOnTop(false)
+    }
+    this.lastRaiseAt = Date.now()
+    log('panel-raised', { phase: this.phase, alwaysOnTop: this.settings.alwaysOnTop })
   }
 
   private moveTo(x: number): void {

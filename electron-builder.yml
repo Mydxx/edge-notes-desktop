@@ -1,0 +1,60 @@
+# Windows 打包配置（第 06 轮）。
+# 产物统一落在 D:\AI-tools\AI开发目录\outputs\edge-notes，不塞进项目目录。
+appId: com.edgenotes.desktop
+productName: Edge Notes Desktop
+copyright: Copyright © 2026 Edge Notes
+
+asar: true
+# 没有需要编译的原生模块，跳过 rebuild 可以省掉一次 node-gyp 折腾
+npmRebuild: false
+# 渲染层与主进程都已打包进 dist/、dist-electron/，node_modules 一个都不需要
+disableDefaultIgnoredFiles: false
+
+directories:
+  output: D:\AI-tools\AI开发目录\outputs\edge-notes
+  buildResources: build
+
+files:
+  - dist/**/*
+  - dist-electron/**/*
+  - package.json
+  # 源码、测试、截图、临时探针一律不进包
+  - '!**/*.map'
+  - '!**/*.ts'
+  - '!node_modules/**/*'
+
+# 托盘图标按 resourcesPath/assets 读取，必须放在 asar 外面
+extraResources:
+  - from: assets
+    to: assets
+    filter:
+      - tray.png
+      - tray@2x.png
+
+win:
+  icon: assets/app.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowElevation: true
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Edge Notes
+  deleteAppDataOnUninstall: false
+  runAfterFinish: true
+  installerLanguages:
+    - zh_CN
+  language: '2052'
+  artifactName: EdgeNotesDesktop-${version}-setup.${ext}
+
+portable:
+  artifactName: EdgeNotesDesktop-${version}-portable.${ext}

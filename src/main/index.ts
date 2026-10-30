@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeTheme, protocol, shell } from 'electron'
+import { app, BrowserWindow, dialog, globalShortcut, ipcMain, Menu, nativeTheme, protocol, shell } from 'electron'
 import type { IpcMainInvokeEvent } from 'electron'
 import { mkdirSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
@@ -9,6 +9,7 @@ import type {
   DockSide,
   EdgeNotesSettings,
   EdgeNotesState,
+  NotesFilesInfo,
   NotesIndexState,
   NoteStatus
 } from '../shared/api'
@@ -25,11 +26,12 @@ import {
 import { getDataDirInfo, migrateDataDir, resolveUserDataDir } from './data-location'
 import { EdgeDock } from './edge-dock'
 import { closeImageViewer, isImageViewerOpen, openImageViewer } from './image-viewer'
-import { applyLoginItem, readLoginItem, reconcileLoginItem } from './login-item'
+import { applyLoginItem, readLoginItem, reconcileLoginItem, removeLegacyRunEntry } from './login-item'
 import { log } from './log'
 import { NotesStore } from './notes-store'
 import { SettingsStore } from './settings-store'
 import { createTray, destroyTray, refreshTray } from './tray'
+import type { TrayHandlers } from './tray'
 
 // 明确应用名：userData 目录与单实例锁都基于它，避免与其它 Electron 应用互相覆盖数据/互相踢掉
 app.setName('Edge Notes Desktop')
@@ -53,6 +55,10 @@ let store: SettingsStore | null = null
 let notes: NotesStore | null = null
 /** 是否正在真正退出：用于区分"关窗口"与"退出应用" */
 let quitting = false
+/** 全局唤出快捷键；被别的程序占用时为 null */
+let wakeShortcut: string | null = null
+/** 候选快捷键：第一个注册成功的生效 */
+const WAKE_ACCELERATORS = ['Control+Alt+N', 'Control+Alt+E']
 
 function currentPhase(): DockPhase {
   return dock?.getPhase() ?? 'collapsed'
@@ -79,7 +85,8 @@ function buildState(): EdgeNotesState {
       expanded: phase === 'expanded' || phase === 'expanding',
       hidden: dock?.isHidden() ?? false,
       triggerWidth: TRIGGER_WIDTH,
-      collapseDelayMs: settings.collapseDelay
+      collapseDelayMs: settings.collapseDelay,
+      wakeShortcut
     }
   }
 }
@@ -103,14 +110,7 @@ function broadcast(): void {
 }
 
 /** 托盘菜单与窗口共用同一套动作，避免两处逻辑分叉 */
-let trayHandlers: {
-  isHidden(): boolean
-  isPinned(): boolean
-  toggleHidden(): void
-  togglePinned(): void
-  openSettings(): void
-  quit(): void
-} | null = null
+let trayHandlers: TrayHandlers | null = null
 
 function toggleHidden(): void {
   if (!dock) {
@@ -118,6 +118,43 @@ function toggleHidden(): void {
   }
   dock.setHidden(!dock.isHidden())
   broadcast()
+}
+
+/** 唤出面板：隐藏态先恢复、收起态直接展开，已经展开则什么都不做 */
+function wakePanel(reason: string): void {
+  if (!dock) {
+    return
+  }
+  dock.showPanel(reason)
+  broadcast()
+}
+
+/**
+ * 托盘图标单击。
+ * 以前是"纯 toggle"：面板已经展开时点一下反而把它藏起来，用户会觉得点了没反应。
+ * 现在只有"确实看得见"的时候才收起，其它情况一律唤出。
+ */
+function wakeFromTray(): void {
+  if (!dock) {
+    return
+  }
+  const phase = dock.getPhase()
+  if (dock.isHidden() || phase === 'collapsed' || phase === 'collapsing') {
+    dock.showPanel('tray-click')
+  } else {
+    dock.setHidden(true)
+  }
+  broadcast()
+}
+
+function registerWakeShortcut(): void {
+  for (const accelerator of WAKE_ACCELERATORS) {
+    if (globalShortcut.register(accelerator, () => wakePanel('shortcut'))) {
+      wakeShortcut = accelerator
+      break
+    }
+  }
+  log('wake-shortcut', { accelerator: wakeShortcut, candidates: WAKE_ACCELERATORS })
 }
 
 function openSettingsFromTray(): void {
@@ -523,6 +560,47 @@ function registerIpc(): void {
     })
   })
 
+  ipcMain.handle(IPC_CHANNELS.notesInfo, (event): NotesFilesInfo => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    const index = notes.state()
+    return {
+      dir: notes.getNotesDir(),
+      activeFile: notes.notePath(index.activeId),
+      indexFile: notes.getIndexPath(),
+      count: index.notes.length
+    }
+  })
+
+  ipcMain.handle(IPC_CHANNELS.openNotesFolder, async (event) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    // 先落盘再打开：用户在资源管理器里看到的必须是刚写进去的内容
+    notes.flushSync()
+    const dir = notes.getNotesDir()
+    mkdirSync(dir, { recursive: true })
+    const failure = await shell.openPath(dir)
+    if (failure) {
+      throw new Error(`打开文件夹失败：${failure}`)
+    }
+    log('notes-folder-opened', { dir })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.revealActiveNote, (event) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    notes.flushSync()
+    const file = notes.notePath(notes.state().activeId)
+    shell.showItemInFolder(file)
+    log('note-revealed', { file })
+  })
+
   ipcMain.handle(IPC_CHANNELS.attachmentsInfo, (event) => {
     requireSender(event)
     const dir = attachmentsDir(app.getPath('userData'))
@@ -674,6 +752,7 @@ async function bootstrap(): Promise<void> {
     activeNoteId: notes.state().activeId,
     migrationWarning: notes.getMigrationWarning(),
     settings: store.get(),
+    launchedAtLogin: process.argv.includes('--autostart'),
     logFile: process.env.EDGE_NOTES_LOG ?? ''
   })
 
@@ -691,28 +770,31 @@ async function bootstrap(): Promise<void> {
   })
 
   // 开机启动以系统实际状态为准：用户可能在 Windows"启动应用"里关掉过。
-  // 未打包时该能力不可用，顺手把历史遗留的 true 清掉，避免界面显示"已开启"却没有启动项。
+  // 现在用「启动」文件夹里的快捷方式，开发模式也能如实回读。
+  // 先清掉旧版写进注册表 Run 的记录（安全软件一直弹窗的源头），再对齐当前意愿。
+  removeLegacyRunEntry()
   if (store) {
     const actual = reconcileLoginItem(store.get().launchAtLogin)
     if (actual !== store.get().launchAtLogin) {
       applySettings({ launchAtLogin: actual })
     }
-    if (!app.isPackaged && store.get().launchAtLogin) {
-      log('login-item-reset-dev', {})
-      applySettings({ launchAtLogin: false })
-    }
   }
+
+  registerWakeShortcut()
 
   trayHandlers = {
     isHidden: () => dock?.isHidden() ?? false,
     isPinned: () => store?.get().pinnedOpen ?? false,
     toggleHidden,
+    wake: wakeFromTray,
+    show: () => wakePanel('tray-menu'),
     togglePinned: () => applySettings({ pinnedOpen: !(store?.get().pinnedOpen ?? false) }),
     openSettings: openSettingsFromTray,
     quit: () => {
       log('quit-from-tray', {})
       app.quit()
-    }
+    },
+    wakeShortcut: () => wakeShortcut
   }
   createTray(trayHandlers)
 }
@@ -740,6 +822,7 @@ if (!gotSingleInstanceLock) {
   })
 
   app.on('will-quit', () => {
+    globalShortcut.unregisterAll()
     destroyTray()
     log('will-quit', {})
   })

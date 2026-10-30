@@ -56,10 +56,12 @@ export interface MigrationResult {
 export interface EdgeNotesRuntime {
   phase: DockPhase
   expanded: boolean
-  /** 是否被隐藏到托盘（隐藏后贴屏幕边缘不会再唤出，只能从托盘恢复） */
+  /** 是否被隐藏到托盘（隐藏后仍可鼠标贴边或按快捷键召回，不再只能点托盘） */
   hidden: boolean
   triggerWidth: number
   collapseDelayMs: number
+  /** 全局快速唤出快捷键；注册失败（被其它程序占用）时为 null */
+  wakeShortcut: string | null
 }
 
 export interface EdgeNotesState {
@@ -99,6 +101,12 @@ export interface NoteSnapshot {
 export interface NoteMeta {
   id: string
   title: string
+  /**
+   * 磁盘上的文件名（相对 notes 目录，例如 `工作笔记.md`）。
+   * 文件名跟着标签走：改标签就改名，id 只是稳定主键，不再出现在文件名里。
+   * 老数据没有这个字段，回落到 `<id>.md`。
+   */
+  file?: string
   createdAt: number
   updatedAt: number
   /** 这篇笔记上次用的是编辑还是预览 */
@@ -117,6 +125,18 @@ export interface NotesIndexState {
 export interface NoteSwitchResult {
   index: NotesIndexState
   note: NoteSnapshot
+}
+
+/** 笔记文件位置信息（设置里展示"笔记存在哪"并支持一键定位） */
+export interface NotesFilesInfo {
+  /** notes 目录（每篇一个 .md） */
+  dir: string
+  /** 当前笔记的 .md 完整路径 */
+  activeFile: string
+  /** 索引文件 notes-index.json */
+  indexFile: string
+  /** 笔记数量 */
+  count: number
 }
 
 /** 附件目录里的一个文件 */
@@ -177,6 +197,9 @@ export const IPC_CHANNELS = {
   notesReorder: 'edge-notes:notes-reorder',
   notesViewState: 'edge-notes:notes-view-state',
   notesIndexChanged: 'edge-notes:notes-index-changed',
+  notesInfo: 'edge-notes:notes-info',
+  openNotesFolder: 'edge-notes:open-notes-folder',
+  revealActiveNote: 'edge-notes:reveal-active-note',
   setNavCollapsed: 'edge-notes:set-nav-collapsed',
   referencedAttachments: 'edge-notes:referenced-attachments'
 } as const
@@ -247,6 +270,12 @@ export interface EdgeNotesApi {
   /** 所有笔记里引用到的附件路径（清理附件时用于跨笔记判断） */
   getReferencedAttachments(): Promise<string[]>
   onNotesIndexChanged(listener: (index: NotesIndexState) => void): () => void
+  /** 笔记目录 / 当前笔记文件位置（设置里展示与定位） */
+  getNotesInfo(): Promise<NotesFilesInfo>
+  /** 在资源管理器里打开 notes 目录 */
+  openNotesFolder(): Promise<void>
+  /** 在资源管理器里选中当前笔记的 .md 文件 */
+  revealActiveNote(): Promise<void>
 
   onStateChanged(listener: (state: EdgeNotesState) => void): () => void
   onNoteStatus(listener: (status: NoteStatus) => void): () => void
