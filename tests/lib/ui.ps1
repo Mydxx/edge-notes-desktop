@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'clipboard-save', 'clipboard-set', 'clipboard-restore')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'kill-renderer', 'clipboard-save', 'clipboard-set', 'clipboard-restore')][string]$Command,
   [string]$OutDir = '',
   [int]$X = -1,
   [int]$Y = -1,
@@ -284,6 +284,17 @@ switch ($Command) {
       $exStyle = [EdgeNative]::GetWindowLong($hwnd, -20)
       "PANEL-TOPMOST hwnd=$hwnd topmost=$([bool]($exStyle -band 0x8))"
     }
+  }
+  'kill-renderer' {
+    # Kill the renderer child process to verify the main process recovery path.
+    if ($PanelPid -le 0) { throw 'kill-renderer requires -PanelPid' }
+    $child = Get-CimInstance Win32_Process -Filter "Name='electron.exe'" |
+      Where-Object { $_.ParentProcessId -eq $PanelPid -and $_.CommandLine -like '*--type=renderer*' } |
+      Select-Object -First 1
+    if (-not $child) { throw 'renderer process not found' }
+    Stop-Process -Id $child.ProcessId -Force
+    Start-Sleep -Milliseconds 300
+    "KILL-RENDERER pid=$($child.ProcessId)"
   }
   'panel-physical' {
     # Visible window rect in physical pixels (DWM extended frame bounds), independent of DIP rounding.

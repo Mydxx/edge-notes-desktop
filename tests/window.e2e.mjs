@@ -637,6 +637,35 @@ async function main() {
   )
   await quitOnce(invalidCase.child)
 
+  // ------------------------- 阶段 10：渲染进程崩溃后的自愈能力（真实杀进程）
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({ side: 'right', width: 350, alwaysOnTop: true, pinnedOpen: false, collapseDelay: 700 }),
+    'utf8'
+  )
+  const crashFrom0 = readLog(logFile).length
+  const crashApp = launchApp({ userDataDir, logFile, cdpPort })
+  await waitForEvent(logFile, 'dock-started', { timeoutMs: 40000, fromIndex: crashFrom0 })
+  const crashPage = await connectPage(cdpPort)
+  const beforeCrash = await crashPage.evaluate(`document.querySelector('.bar__title')?.textContent ?? 'none'`)
+  const crashLogFrom = readLog(logFile).length
+  const killInfo = ps('kill-renderer', '-PanelPid', String(crashApp.pid))
+  const reloadRecord = await waitForEvent(logFile, 'renderer-reload', { timeoutMs: 12000, fromIndex: crashLogFrom }).catch(
+    () => null
+  )
+  record('渲染进程被强杀后主进程记录并自动重载', Boolean(reloadRecord), `${killInfo} / reload=${Boolean(reloadRecord)}`)
+  await delay(1500)
+  const recoveredPage = await connectPage(cdpPort)
+  const afterCrash = await recoveredPage.evaluate(`document.querySelector('.bar__title')?.textContent ?? 'none'`)
+  const apiBack = await recoveredPage.evaluate(`typeof window.edgeNotes?.getState === 'function'`)
+  record('崩溃后界面自动恢复可用', beforeCrash === 'Edge Notes' && afterCrash === 'Edge Notes' && apiBack === true, `${beforeCrash} → ${afterCrash}`)
+  const recoveredState = await recoveredPage.evaluate('window.edgeNotes.getNote()')
+  record('崩溃恢复后笔记数据仍在', typeof recoveredState.content === 'string')
+  await recoveredPage.evaluate(`document.getElementById('panel-close').click()`)
+  await waitChildExit(crashApp, 8000)
+  crashPage.close()
+  recoveredPage.close()
+
   record('项目根目录存在构建产物', existsSync(path.join(root, 'dist', 'renderer', 'index.html')))
 
   finish()
