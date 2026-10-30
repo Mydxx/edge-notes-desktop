@@ -1,6 +1,6 @@
 // 窗口行为端到端验证：真实启动 Electron、真实移动鼠标、通过 CDP 点击 UI，断言日志与窗口状态。
 // 用法：npm run build && node tests/window.e2e.mjs
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { connectPage } from './lib/cdp.mjs'
@@ -31,6 +31,10 @@ const cdpPort = 9333
 const { record, finish } = createReporter()
 
 const summarize = (records) => records.map((item) => item.event).join(' → ')
+
+/** 清掉当前焦点（bringToFront 会把焦点恢复到编辑框，编辑框聚焦会抑制自动收起） */
+const blurActiveElement = (page) =>
+  page.evaluate(`(() => { const el = document.activeElement; if (el && typeof el.blur === 'function') { el.blur() } return document.activeElement?.id ?? 'none' })()`)
 
 /** 真实鼠标点击 + 状态轮询；单击偶尔会被窗口动画/焦点切换吃掉，允许有限次重试 */
 async function realClickUntil(page, x, y, predicate, attempts = 3) {
@@ -147,6 +151,8 @@ async function main() {
 
   // --------------------------- 阶段 2c：设置弹层（左右切换）+ 真实拖动调宽
   record('头栏存在设置入口', (await page.evaluate(`!!document.getElementById('open-settings')`)) === true)
+  // 确保此刻是收起态，这样换侧断言才有确定的期望值
+  await waitCollapsed(page)
   await page.evaluate(`document.getElementById('open-settings').click()`)
   await waitFor(page, `document.querySelector('.settings') !== null`, 2000, '设置弹层打开')
   const popoverText = await page.evaluate(`document.querySelector('.settings')?.textContent ?? ''`)
@@ -180,6 +186,10 @@ async function main() {
   // 真实鼠标拖动内缘把手加宽
   await expandByHover(page, workRightPx, workMidPx)
   await page.bringToFront()
+  // bringToFront 会让 Chromium 把焦点恢复到唯一可编辑元素上；编辑框聚焦会抑制自动收起，
+  // 必须显式清掉，否则后续"离开即收起"的计时断言会被静默影响。
+  const activeAfterFront = await blurActiveElement(page)
+  record('测试前置：编辑框未持有焦点', activeAfterFront !== 'note-editor', String(activeAfterFront))
   await delay(300)
   const widthBefore = (await page.evaluate('window.edgeNotes.getState()')).settings.width
   const handleRect = await page.evaluate(`(() => {
@@ -200,7 +210,15 @@ async function main() {
   const afterDrag = await page.evaluate('window.edgeNotes.getState()')
   const dragRecords = readLog(logFile).slice(dragFrom)
   record('真实拖动内缘可加宽面板', afterDrag.settings.width >= widthBefore + 60, `${widthBefore} -> ${afterDrag.settings.width}`)
-  record('拖动期间不会自动收起', !dragRecords.some((item) => item.event === 'collapse-start'))
+  // 只统计"拖动进行中"（resizing=true 区间）是否发生收起；松手后指针停在边缘触发的收起属于正常行为
+  const resizeOn = dragRecords.findIndex((item) => item.event === 'resizing-changed' && item.resizing === true)
+  const resizeOff = dragRecords.findIndex((item) => item.event === 'resizing-changed' && item.resizing === false)
+  const duringDrag = resizeOn >= 0 && resizeOff > resizeOn ? dragRecords.slice(resizeOn, resizeOff + 1) : []
+  record(
+    '拖动期间不会自动收起',
+    duringDrag.length > 0 && !duringDrag.some((item) => item.event === 'collapse-start'),
+    `拖动区间 ${duringDrag.length} 条事件`
+  )
   const dragLayout = dragRecords.filter((item) => item.event === 'layout-reapplied').at(-1)
   record(
     '拖动后仍贴合屏幕边缘',
@@ -232,10 +250,65 @@ async function main() {
   ps('drag', '-X', String(grab2X), '-Y', String(grab2Y), '-ToX', String(grab2X + Math.round(260 * scaleFactor)), '-ToY', String(grab2Y))
   await delay(400)
   const clamped = (await page.evaluate('window.edgeNotes.getState()')).settings.width
-  record('过窄拖动被夹紧到最小宽度', clamped >= 258 && clamped <= 262, `${clamped}px`)
+  record('过窄拖动被夹紧到最小宽度 280', clamped >= 278 && clamped <= 282, `${clamped}px`)
 
   await page.evaluate('window.edgeNotes.setWidth(350)')
   await delay(350)
+
+  // ------------------------------- 阶段 2d：自动收起延迟三档（真实计时）
+  const openSettings = async () => {
+    await page.evaluate(`document.getElementById('open-settings').click()`)
+    await waitFor(page, `document.querySelector('.settings') !== null`, 2000, '设置弹层')
+  }
+  const closeSettings = async () => {
+    await page.evaluate(`document.getElementById('open-settings').click()`)
+    await delay(150)
+  }
+
+  await openSettings()
+  await page.evaluate(`document.getElementById('delay-300').click()`)
+  const shortDelayState = await waitState(page, (state) => state.settings.collapseDelay === 300, 4000)
+  record('设置弹层可切到 0.3s 收起', shortDelayState.settings.collapseDelay === 300)
+  await closeSettings()
+
+  await expandByHover(page, workRightPx, workMidPx)
+  await blurActiveElement(page)
+  let delayFrom = readLog(logFile).length
+  ps('move', '-X', '200', '-Y', '200', '-Wait', '900')
+  let delayRecords = readLog(logFile).slice(delayFrom)
+  let scheduledRecord = delayRecords.find((item) => item.event === 'collapse-scheduled')
+  let collapseStartRecord = delayRecords.find((item) => item.event === 'collapse-start')
+  const shortDelta = scheduledRecord && collapseStartRecord ? collapseStartRecord.t - scheduledRecord.t : -1
+  record(
+    '0.3s 档位实际约 300ms 后收起',
+    Boolean(scheduledRecord) && scheduledRecord.delayMs === 300 && shortDelta > 200 && shortDelta < 430,
+    `${shortDelta}ms`
+  )
+
+  await openSettings()
+  await page.evaluate(`document.getElementById('delay-1200').click()`)
+  const longDelayState = await waitState(page, (state) => state.settings.collapseDelay === 1200, 4000)
+  record('设置弹层可切到 1.2s 收起', longDelayState.settings.collapseDelay === 1200)
+  await closeSettings()
+
+  await expandByHover(page, workRightPx, workMidPx)
+  await blurActiveElement(page)
+  delayFrom = readLog(logFile).length
+  ps('move', '-X', '200', '-Y', '200', '-Wait', '1700')
+  delayRecords = readLog(logFile).slice(delayFrom)
+  scheduledRecord = delayRecords.find((item) => item.event === 'collapse-scheduled')
+  collapseStartRecord = delayRecords.find((item) => item.event === 'collapse-start')
+  const longDelta = scheduledRecord && collapseStartRecord ? collapseStartRecord.t - scheduledRecord.t : -1
+  record(
+    '1.2s 档位实际约 1200ms 后收起',
+    Boolean(scheduledRecord) && scheduledRecord.delayMs === 1200 && longDelta > 1050 && longDelta < 1360,
+    `${longDelta}ms`
+  )
+
+  await openSettings()
+  await page.evaluate(`document.getElementById('delay-700').click()`)
+  await waitState(page, (state) => state.settings.collapseDelay === 700, 4000)
+  await closeSettings()
 
   // ------------------------------------------------------ 阶段 3：真实鼠标展开/收起
   // 按日志下标切分阶段，避免依赖两个进程的墙钟时间；
@@ -394,6 +467,8 @@ async function main() {
   // ------------------------------------------- 阶段 7：设置持久化 + 退出按钮
   await clickAndWait(page, 'toggle-always-on-top', (state) => state.settings.alwaysOnTop === false)
   await clickAndWait(page, 'toggle-pinned', (state) => state.settings.pinnedOpen === true)
+  await page.evaluate('window.edgeNotes.setCollapseDelay(1200)')
+  await waitState(page, (state) => state.settings.collapseDelay === 1200, 4000)
   await delay(500)
 
   const quitFrom = readLog(logFile).length
@@ -414,8 +489,10 @@ async function main() {
   const restartRecords = readLog(logFile).slice(beforeRestart)
   const readyRecord = restartRecords.find((item) => item.event === 'app-ready')
   record(
-    '重启后恢复置顶/固定展开设置',
-    readyRecord?.settings?.alwaysOnTop === false && readyRecord?.settings?.pinnedOpen === true,
+    '重启后恢复置顶/固定展开/收起延迟',
+    readyRecord?.settings?.alwaysOnTop === false &&
+      readyRecord?.settings?.pinnedOpen === true &&
+      readyRecord?.settings?.collapseDelay === 1200,
     JSON.stringify(readyRecord?.settings)
   )
   record('重启后按固定展开直接展开', restarted.phase === 'expanded', restarted.phase)
@@ -433,12 +510,17 @@ async function main() {
   // 置顶关闭时触发条可能被其他普通窗口遮住（「移出屏幕」方案的固有特性），
   // 因此左侧验证前先恢复置顶，保证读到的像素就是面板本身。
   await clickAndWait(page2, 'toggle-always-on-top', (state) => state.settings.alwaysOnTop === true)
-  await delay(300)
-  const leftLayout = readLog(logFile)
-    .slice(leftLayoutFrom)
-    .filter((item) => item.event === 'layout-reapplied')
+  await delay(450)
+  const leftSideRecords = readLog(logFile).slice(leftLayoutFrom)
+  // 可见状态下换侧走平移过渡（side-transition-start + expanded/side-switch），
+  // 收起状态下换侧直接落位（layout-reapplied）；两种路径都要认。
+  const leftLayout = leftSideRecords
+    .filter((item) => item.event === 'layout-reapplied' || (item.event === 'expanded' && item.reason === 'side-switch'))
     .at(-1)
-  record('左侧停靠：展开位置贴合左边缘', Boolean(leftLayout) && Math.abs(leftLayout.applied.x - area.x) <= 2, JSON.stringify(leftLayout?.applied))
+  const leftBounds = leftLayout?.applied ?? leftLayout?.bounds
+  const sideTransition = leftSideRecords.find((item) => item.event === 'side-transition-start')
+  record('可见状态下换侧使用平移过渡', Boolean(sideTransition), JSON.stringify(sideTransition ? { fromX: sideTransition.fromX, targetX: sideTransition.targetX } : null))
+  record('左侧停靠：展开位置贴合左边缘', Boolean(leftBounds) && Math.abs(leftBounds.x - area.x) <= 2, JSON.stringify(leftBounds))
 
   await clickAndWait(page2, 'toggle-pinned', (state) => state.settings.pinnedOpen === false)
   await delay(1200)
@@ -462,13 +544,16 @@ async function main() {
 
   // 复位为交付默认状态
   await page2.evaluate(`window.edgeNotes.setSide('right')`)
+  await page2.evaluate('window.edgeNotes.setCollapseDelay(700)')
+  await delay(200)
   const finalState = await page2.evaluate('window.edgeNotes.getState()')
   record(
     '恢复正常默认设置',
     finalState.settings.side === 'right' &&
       finalState.settings.width === 350 &&
       finalState.settings.alwaysOnTop === true &&
-      finalState.settings.pinnedOpen === false,
+      finalState.settings.pinnedOpen === false &&
+      finalState.settings.collapseDelay === 700,
     JSON.stringify(finalState.settings)
   )
   await delay(400)
@@ -477,6 +562,51 @@ async function main() {
   await page2.evaluate(`document.getElementById('panel-close').click()`)
   await waitChildExit(app, 8000)
   page2.close()
+
+  // ------------------------- 阶段 9：设置文件损坏 / 字段非法时安全回退
+  const startOnce = async () => {
+    const from = readLog(logFile).length
+    const child = launchApp({ userDataDir, logFile, cdpPort })
+    const started = await waitForEvent(logFile, 'dock-started', { timeoutMs: 40000, fromIndex: from })
+    const records = readLog(logFile).slice(from)
+    return { child, started: started.record, settings: records.find((item) => item.event === 'app-ready')?.settings }
+  }
+  const quitOnce = async (child) => {
+    const session = await connectPage(cdpPort)
+    await session.evaluate(`document.getElementById('panel-close').click()`)
+    await waitChildExit(child, 8000)
+    session.close()
+  }
+
+  // 1) JSON 被截断（真实损坏）
+  writeFileSync(settingsPath, '{"side":"left","width":420,"collapseDelay":', 'utf8')
+  const brokenCase = await startOnce()
+  record('设置文件 JSON 损坏仍能正常启动', Boolean(brokenCase.started.applied), JSON.stringify(brokenCase.started.applied))
+  record(
+    '损坏文件回退到默认设置',
+    brokenCase.settings?.side === 'right' &&
+      brokenCase.settings?.width === 350 &&
+      brokenCase.settings?.collapseDelay === 700,
+    JSON.stringify(brokenCase.settings)
+  )
+  await quitOnce(brokenCase.child)
+
+  // 2) JSON 合法但字段越界/类型不对
+  writeFileSync(
+    settingsPath,
+    JSON.stringify({ side: 'diagonal', width: 9999, collapseDelay: 999, alwaysOnTop: 'yes', pinnedOpen: 1 }),
+    'utf8'
+  )
+  const invalidCase = await startOnce()
+  record(
+    '非法字段被夹紧或回退',
+    invalidCase.settings?.side === 'right' &&
+      invalidCase.settings?.width === 600 &&
+      invalidCase.settings?.collapseDelay === 700 &&
+      invalidCase.settings?.pinnedOpen === false,
+    JSON.stringify(invalidCase.settings)
+  )
+  await quitOnce(invalidCase.child)
 
   record('项目根目录存在构建产物', existsSync(path.join(root, 'dist', 'renderer', 'index.html')))
 

@@ -3,7 +3,7 @@ import type { IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
 import { IPC_CHANNELS } from '../shared/api'
 import type { DockPhase, DockSide, EdgeNotesSettings, EdgeNotesState, NoteStatus } from '../shared/api'
-import { COLLAPSE_DELAY_MS, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
+import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
 import { EdgeDock } from './edge-dock'
 import { log } from './log'
 import { NotesStore } from './notes-store'
@@ -28,7 +28,8 @@ function buildState(): EdgeNotesState {
     side: 'right',
     width: PANEL_WIDTH_DEFAULT,
     alwaysOnTop: true,
-    pinnedOpen: false
+    pinnedOpen: false,
+    collapseDelay: COLLAPSE_DELAY_DEFAULT
   }
   const phase = currentPhase()
   return {
@@ -37,7 +38,7 @@ function buildState(): EdgeNotesState {
       phase,
       expanded: phase === 'expanded' || phase === 'expanding',
       triggerWidth: TRIGGER_WIDTH,
-      collapseDelayMs: COLLAPSE_DELAY_MS
+      collapseDelayMs: settings.collapseDelay
     }
   }
 }
@@ -165,6 +166,14 @@ function registerIpc(): void {
       throw new TypeError('width must be a finite number')
     }
     return applySettings({ width: value })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.setCollapseDelay, (event, value: unknown) => {
+    requireSender(event)
+    if (value !== 300 && value !== 700 && value !== 1200) {
+      throw new TypeError('collapseDelay must be one of 300 / 700 / 1200')
+    }
+    return applySettings({ collapseDelay: value })
   })
 
   ipcMain.on(IPC_CHANNELS.setResizing, (event, value: unknown) => {

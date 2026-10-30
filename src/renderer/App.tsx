@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import type { EdgeNotesState, NoteStatus } from '../shared/api'
+import type { CollapseDelay, EdgeNotesState, NoteStatus } from '../shared/api'
+import { COLLAPSE_DELAY_OPTIONS } from '../shared/constants'
 
 const EMPTY_STATUS: NoteStatus = { state: 'idle', savedAt: null, message: null }
+
+const DELAY_LABEL: Record<CollapseDelay, string> = {
+  300: '0.3s',
+  700: '0.7s',
+  1200: '1.2s'
+}
 
 function IconTopMost() {
   return (
@@ -14,29 +21,11 @@ function IconTopMost() {
   )
 }
 
-function IconLockOpen() {
+function IconPin() {
   return (
     <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
       <rect x="3.6" y="7.2" width="8.8" height="6.2" rx="1.5" />
       <path d="M5.9 7.2V5.3a2.2 2.2 0 0 1 4.4 0" />
-    </svg>
-  )
-}
-
-function IconTrash() {
-  return (
-    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M3 4.4h10" />
-      <path d="M6.3 4.4V3h3.4v1.4" />
-      <path d="M4.7 4.4l.6 8.4h5.4l.6-8.4" />
-    </svg>
-  )
-}
-
-function IconClose() {
-  return (
-    <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-      <path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" />
     </svg>
   )
 }
@@ -47,6 +36,14 @@ function IconSettings() {
       <path d="M2.8 4.6h10.4M2.8 11.4h10.4" />
       <circle cx="6.2" cy="4.6" r="1.5" />
       <circle cx="9.8" cy="11.4" r="1.5" />
+    </svg>
+  )
+}
+
+function IconClose() {
+  return (
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
+      <path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" />
     </svg>
   )
 }
@@ -64,7 +61,7 @@ export default function App() {
   const dragRef = useRef<{ anchor: number; side: 'left' | 'right' } | null>(null)
   const lastWidthRef = useRef(0)
 
-  // 窗口设置（置顶 / 固定展开）
+  // 窗口设置
   useEffect(() => {
     let alive = true
     const unsubscribe = window.edgeNotes.onStateChanged((next) => {
@@ -244,19 +241,16 @@ export default function App() {
         onPointerUp={handleResizeEnd}
         onPointerCancel={handleResizeEnd}
       />
+
       <header className="bar">
         <span className="bar__title">Edge Notes</span>
-        {statusLabel ? (
-          <span className={`bar__status bar__status--${status.state}`} title={status.message ?? ''}>
-            {statusLabel}
-          </span>
-        ) : null}
         <span className="bar__spacer" />
         <button
           id="toggle-always-on-top"
           type="button"
           className="iconBtn"
           aria-pressed={alwaysOnTop}
+          aria-label={alwaysOnTop ? '置顶：已开启' : '置顶：已关闭'}
           title={alwaysOnTop ? '置顶：已开启' : '置顶：已关闭'}
           disabled={!settings || busy}
           onClick={() => {
@@ -270,13 +264,14 @@ export default function App() {
           type="button"
           className="iconBtn"
           aria-pressed={pinnedOpen}
+          aria-label={pinnedOpen ? '固定展开：已开启' : '固定展开：已关闭'}
           title={pinnedOpen ? '固定展开：已开启' : '固定展开：已关闭'}
           disabled={!settings || busy}
           onClick={() => {
             void applySettings(() => window.edgeNotes.setPinnedOpen(!pinnedOpen))
           }}
         >
-          <IconLockOpen />
+          <IconPin />
         </button>
         <button
           id="open-settings"
@@ -284,32 +279,12 @@ export default function App() {
           className="iconBtn"
           aria-pressed={settingsOpen}
           aria-haspopup="true"
+          aria-label="设置"
           title="设置"
           disabled={!settings}
           onClick={() => setSettingsOpen((open) => !open)}
         >
           <IconSettings />
-        </button>
-        <button
-          id="clear-note"
-          type="button"
-          className="iconBtn iconBtn--aux"
-          title="清空笔记"
-          disabled={!settings}
-          onClick={() => setConfirmingClear(true)}
-        >
-          <IconTrash />
-        </button>
-        <button
-          id="panel-close"
-          type="button"
-          className="iconBtn iconBtn--aux"
-          title="退出 Edge Notes"
-          onClick={() => {
-            void window.edgeNotes.quit()
-          }}
-        >
-          <IconClose />
         </button>
       </header>
 
@@ -340,10 +315,32 @@ export default function App() {
               </button>
             </span>
           </div>
+
           <div className="settings__row">
             <span className="settings__label">面板宽度</span>
             <span className="settings__value">{settings.width}px</span>
           </div>
+
+          <div className="settings__row">
+            <span className="settings__label">自动收起</span>
+            <span className="segmented">
+              {COLLAPSE_DELAY_OPTIONS.map((option) => (
+                <button
+                  key={option}
+                  id={`delay-${option}`}
+                  type="button"
+                  aria-pressed={settings.collapseDelay === option}
+                  title={`鼠标离开后 ${option}ms 收起`}
+                  onClick={() => {
+                    void applySettings(() => window.edgeNotes.setCollapseDelay(option))
+                  }}
+                >
+                  {DELAY_LABEL[option]}
+                </button>
+              ))}
+            </span>
+          </div>
+
           <p className="settings__hint">拖动面板内侧边缘可调整宽度；Esc 关闭本面板。</p>
         </div>
       ) : null}
@@ -384,6 +381,27 @@ export default function App() {
         onFocus={() => window.edgeNotes.setEditorFocused(true)}
         onBlur={() => window.edgeNotes.setEditorFocused(false)}
       />
+
+      <footer className="foot">
+        <span id="save-status" className={`foot__status foot__status--${status.state}`} title={status.message ?? ''}>
+          {statusLabel}
+        </span>
+        <button id="clear-note" type="button" className="textBtn textBtn--quiet" title="清空当前笔记" onClick={() => setConfirmingClear(true)}>
+          清空
+        </button>
+        <button
+          id="panel-close"
+          type="button"
+          className="iconBtn iconBtn--sm"
+          aria-label="退出 Edge Notes"
+          title="退出 Edge Notes"
+          onClick={() => {
+            void window.edgeNotes.quit()
+          }}
+        >
+          <IconClose />
+        </button>
+      </footer>
     </div>
   )
 }

@@ -4,8 +4,11 @@ export type DockSide = 'right' | 'left'
 
 export type DockPhase = 'collapsed' | 'expanding' | 'expanded' | 'collapsing'
 
+/** 自动收起延迟档位 */
+export type CollapseDelay = 300 | 700 | 1200
+
 export interface EdgeNotesSettings {
-  /** 停靠边：右侧（默认）/ 左侧（已预留） */
+  /** 停靠边：右侧（默认）/ 左侧 */
   side: DockSide
   /** 面板宽度（DIP） */
   width: number
@@ -13,6 +16,8 @@ export interface EdgeNotesSettings {
   alwaysOnTop: boolean
   /** 固定展开开关：开启后鼠标离开不自动收起 */
   pinnedOpen: boolean
+  /** 鼠标离开后多久自动收起 */
+  collapseDelay: CollapseDelay
 }
 
 export interface EdgeNotesRuntime {
@@ -49,6 +54,7 @@ export const IPC_CHANNELS = {
   setPinnedOpen: 'edge-notes:set-pinned-open',
   setSide: 'edge-notes:set-side',
   setWidth: 'edge-notes:set-width',
+  setCollapseDelay: 'edge-notes:set-collapse-delay',
   setResizing: 'edge-notes:set-resizing',
   quit: 'edge-notes:quit',
   stateChanged: 'edge-notes:state-changed',
@@ -66,6 +72,7 @@ export interface EdgeNotesApi {
   setPinnedOpen(value: boolean): Promise<EdgeNotesState>
   setSide(side: DockSide): Promise<EdgeNotesState>
   setWidth(width: number): Promise<EdgeNotesState>
+  setCollapseDelay(delay: CollapseDelay): Promise<EdgeNotesState>
   /** 拖动调整宽度期间调用，避免鼠标暂时离开面板就被收起 */
   setResizing(value: boolean): void
   quit(): Promise<void>

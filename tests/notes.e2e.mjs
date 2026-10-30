@@ -32,7 +32,7 @@ const cdpPort = 9334
 const { record, finish } = createReporter()
 
 const readNoteFile = () => (existsSync(noteFile) ? readFileSync(noteFile, 'utf8') : null)
-const statusText = (page) => page.evaluate(`document.querySelector('.bar__status')?.textContent ?? ''`)
+const statusText = (page) => page.evaluate(`document.querySelector('#save-status')?.textContent ?? ''`)
 const editorValue = (page) => page.evaluate(`document.getElementById('note-editor').value`)
 
 async function openPanel(page, metrics) {
@@ -41,6 +41,8 @@ async function openPanel(page, metrics) {
   await expandByHover(page, edgeX, midY)
   // 桌面上可能存在其它同样贴边置顶的窗口，先把本窗口提到前台，确保真实鼠标点击落在本应用上
   await page.bringToFront()
+  // bringToFront 会让 Chromium 把焦点恢复到编辑框；后面需要"未聚焦"的前提，这里先清掉
+  await page.evaluate(`(() => { const el = document.activeElement; if (el && typeof el.blur === 'function') { el.blur() } })()`)
   await delay(250)
 }
 
@@ -115,7 +117,7 @@ async function main() {
   await page.insertText(firstText)
   await waitFor(page, `document.getElementById('note-editor').value.length === ${firstText.length}`, 3000, '文本进入编辑区')
   record('输入后编辑区内容正确', (await editorValue(page)) === firstText, `${firstText.length} 字`)
-  await waitFor(page, `document.querySelector('.bar__status')?.textContent === '已保存'`, 6000, '已保存状态')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 6000, '已保存状态')
   record('输入后显示「已保存」', (await statusText(page)) === '已保存')
   record('中文/换行/标点原样落盘', readNoteFile() === firstText, `${readNoteFile()?.length ?? 0} 字`)
   const statusEvents = readLog(logFile).slice(typingFrom).filter((item) => item.event === 'note-status')
@@ -141,7 +143,7 @@ async function main() {
     '剪贴板内容进入编辑区'
   )
   record('真实剪贴板 Ctrl+V 粘贴成功', (await editorValue(page)) === firstText + pasted)
-  await waitFor(page, `document.querySelector('.bar__status')?.textContent === '已保存'`, 6000, '粘贴后已保存')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 6000, '粘贴后已保存')
   record('粘贴内容（含制表符与行尾空格）正确落盘', readNoteFile() === firstText + pasted)
   ps('clipboard-restore', '-TextFile', clipboardBackup)
 
@@ -153,7 +155,7 @@ async function main() {
     await delay(25)
   }
   const fullText = firstText + pasted + chunks.join('')
-  await waitFor(page, `document.querySelector('.bar__status')?.textContent === '已保存'`, 8000, '快速输入后已保存')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 8000, '快速输入后已保存')
   record('快速连续输入的最后内容被保存', readNoteFile() === fullText, `文件 ${readNoteFile()?.length ?? 0} 字 / 期望 ${fullText.length} 字`)
   const fastSaves = readLog(logFile).slice(fastFrom).filter((item) => item.event === 'note-saved')
   record('频繁输入按防抖合并写盘', fastSaves.length >= 1 && fastSaves.length <= 4, `14 次输入产生 ${fastSaves.length} 次写盘`)
@@ -211,13 +213,13 @@ async function main() {
   await waitFor(page, `document.querySelector('.confirm') !== null`, 2000, '清空确认条')
   await page.evaluate(`document.getElementById('clear-confirm').click()`)
   await waitFor(page, `document.getElementById('note-editor').value === ''`, 3000, '编辑区已清空')
-  await waitFor(page, `document.querySelector('.bar__status')?.textContent === '已保存'`, 3000, '清空后已保存')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 3000, '清空后已保存')
   record('确认清空后编辑区与磁盘都为空', (await editorValue(page)) === '' && readNoteFile() === '')
 
   // ----------------------------------------------- 保存失败提示（真实故障注入）
   await focusEditorAtEnd(page)
   await page.insertText('故障注入前的正常内容')
-  await waitFor(page, `document.querySelector('.bar__status')?.textContent === '已保存'`, 6000, '故障前的保存')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 6000, '故障前的保存')
   const beforeFailure = await editorValue(page)
 
   rmSync(noteFile, { force: true })
@@ -226,7 +228,7 @@ async function main() {
   await waitFor(page, `document.querySelector('.errorBar') !== null`, 8000, '保存失败提示')
   const failureUi = await page.evaluate(`({
     errorText: document.querySelector('.errorBar__text')?.textContent ?? '',
-    status: document.querySelector('.bar__status')?.textContent ?? '',
+    status: document.querySelector('#save-status')?.textContent ?? '',
     value: document.getElementById('note-editor').value
   })`)
   record('保存失败时界面明确提示', failureUi.status === '保存失败' && failureUi.errorText.includes('保存失败'), failureUi.errorText)
@@ -239,7 +241,7 @@ async function main() {
   rmSync(noteFile, { recursive: true, force: true })
   await page.evaluate(`document.querySelector('.errorBar .textBtn').click()`)
   await waitFor(page, `document.querySelector('.errorBar') === null`, 6000, '重试后错误提示消失')
-  await waitFor(page, `document.querySelector('.bar__status')?.textContent === '已保存'`, 4000, '重试后已保存')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 4000, '重试后已保存')
   record('恢复可写后重试成功写入', readNoteFile() === failureUi.value, `${readNoteFile()?.length ?? 0} 字`)
   await page.captureScreenshot(path.join(shotsDir, '03-recovered.png'))
 
@@ -272,7 +274,7 @@ async function main() {
   await page2.evaluate(`document.getElementById('clear-note').click()`)
   await waitFor(page2, `document.querySelector('.confirm') !== null`, 2000, '清空确认条')
   await page2.evaluate(`document.getElementById('clear-confirm').click()`)
-  await waitFor(page2, `document.querySelector('.bar__status')?.textContent === '已保存'`, 4000, '收尾清空')
+  await waitFor(page2, `document.querySelector('#save-status')?.textContent === '已保存'`, 4000, '收尾清空')
   await page2.evaluate(`document.getElementById('panel-close').click()`)
   await waitChildExit(app, 8000)
   page2.close()

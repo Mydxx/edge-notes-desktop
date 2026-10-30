@@ -1,18 +1,26 @@
 import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { DockSide, EdgeNotesSettings } from '../shared/api'
-import { PANEL_WIDTH_DEFAULT, PANEL_WIDTH_MAX, PANEL_WIDTH_MIN } from '../shared/constants'
+import type { CollapseDelay, DockSide, EdgeNotesSettings } from '../shared/api'
+import {
+  COLLAPSE_DELAY_DEFAULT,
+  COLLAPSE_DELAY_OPTIONS,
+  PANEL_WIDTH_DEFAULT,
+  PANEL_WIDTH_MAX,
+  PANEL_WIDTH_MIN
+} from '../shared/constants'
 
 export const DEFAULT_SETTINGS: EdgeNotesSettings = {
   side: 'right',
   width: PANEL_WIDTH_DEFAULT,
   alwaysOnTop: true,
-  pinnedOpen: false
+  pinnedOpen: false,
+  collapseDelay: COLLAPSE_DELAY_DEFAULT
 }
 
 /**
  * 设置持久化：userData/edge-notes-settings.json。
- * 写入采用「临时文件 + rename」避免半截文件，读入时逐字段校验并夹紧取值范围。
+ * 写入采用「临时文件 + rename」避免半截文件；读入时逐字段校验并夹紧取值范围，
+ * 文件损坏、字段缺失或类型不符都安全回退到默认值，不阻断启动。
  */
 export class SettingsStore {
   private readonly filePath: string
@@ -63,7 +71,7 @@ export class SettingsStore {
       writeFileSync(tmpPath, `${JSON.stringify(this.data, null, 2)}\n`, 'utf8')
       renameSync(tmpPath, this.filePath)
     } catch {
-      // 写入失败不应崩溃退出
+      // 写入失败不应崩溃退出；下次变更会再次尝试
     }
   }
 
@@ -74,21 +82,28 @@ export class SettingsStore {
         return sanitizeSettings({ ...DEFAULT_SETTINGS, ...(raw as Record<string, unknown>) })
       }
     } catch {
-      // 文件缺失或损坏时回落到默认值
+      // 文件缺失 / JSON 损坏 / 读取失败：一律回落到默认值
     }
     return { ...DEFAULT_SETTINGS }
   }
 }
 
+/** 逐字段校验：不认识的值一律取默认，绝不把非法值传进窗口逻辑 */
 export function sanitizeSettings(input: Record<string, unknown>): EdgeNotesSettings {
   const side: DockSide = input.side === 'left' ? 'left' : 'right'
 
   const rawWidth = typeof input.width === 'number' && Number.isFinite(input.width) ? input.width : PANEL_WIDTH_DEFAULT
   const width = Math.min(PANEL_WIDTH_MAX, Math.max(PANEL_WIDTH_MIN, Math.round(rawWidth)))
 
+  const rawDelay = typeof input.collapseDelay === 'number' ? input.collapseDelay : COLLAPSE_DELAY_DEFAULT
+  const collapseDelay = (COLLAPSE_DELAY_OPTIONS as readonly number[]).includes(rawDelay)
+    ? (rawDelay as CollapseDelay)
+    : COLLAPSE_DELAY_DEFAULT
+
   return {
     side,
     width,
+    collapseDelay,
     alwaysOnTop: input.alwaysOnTop !== false,
     pinnedOpen: input.pinnedOpen === true
   }

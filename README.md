@@ -13,7 +13,8 @@ npm run dev        # 编译主进程 + 起 Vite(5199) + 拉起 Electron
 npm run build      # tsc 编译主进程/preload + vite 构建渲染层
 npm start          # 构建后以产物方式启动（file:// 加载）
 npm run typecheck  # 两套 tsconfig 类型检查
-npm run test:e2e   # 构建 + 窗口行为 54 项 + 笔记 33 项断言
+npm run test:e2e   # 构建 + 窗口 73 项 + 笔记 33 项断言
+npm run test:visual # 多宽度/多状态截图 + 布局溢出度量（14 项断言）
 ```
 
 ## 目录结构
@@ -29,8 +30,9 @@ src/shared/api.ts          IPC 契约：类型 + 通道名（主进程与 preloa
 src/shared/constants.ts    4px 触发条、350 默认宽度、700ms 延迟、180ms 动画等常量
 src/renderer/              React 界面：紧凑头栏 + 主编辑区
 scripts/dev.mjs            开发启动器（无 concurrently / wait-on 之类额外依赖）
-tests/window.e2e.mjs       窗口行为端到端验证（真实鼠标 + CDP + 系统 Z 序）
+tests/window.e2e.mjs       窗口行为端到端验证（真实鼠标 + CDP + 系统 Z 序 + 设置回退）
 tests/notes.e2e.mjs        笔记功能端到端验证（真实输入 + 真实剪贴板 + 故障注入）
+tests/visual.e2e.mjs       视觉验证：多宽度/空笔记/长文本/设置弹层截图 + 布局度量
 tests/lib/                 CDP 客户端、日志读取、PowerShell 驱动脚本、清理脚本
 ```
 
@@ -39,10 +41,11 @@ tests/lib/                 CDP 客户端、日志读取、PowerShell 驱动脚�
 | 参数 | 值 | 位置 |
 |---|---|---|
 | 触发条宽度 | 4 DIP | `constants.ts: TRIGGER_WIDTH` |
-| 默认面板宽度 | 350 DIP（260–720 可调） | `constants.ts` / `settings-store.ts` |
-| 收起延迟 | 700ms | `constants.ts: COLLAPSE_DELAY_MS` |
+| 面板宽度 | 默认 350，可拖 280–600（并按工作区宽 - 120 二次夹紧） | `constants.ts` / `settings-store.ts` |
+| 收起延迟 | 三档 300 / 700 / 1200ms，默认 700 | `constants.ts: COLLAPSE_DELAY_OPTIONS` |
 | 展开/收起动画 | 180ms，16ms 帧，easeOutCubic | `edge-dock.ts` |
-| 指针轮询间隔 | 40ms（主进程） | `constants.ts: CURSOR_POLL_MS` |
+| 切边过渡 | 220ms 平移（仅可见态；拖动调宽不走动画） | `edge-dock.ts` |
+| 指针轮询间隔 | 40ms（主进程，实测收起态整机 CPU 0.04%） | `constants.ts: CURSOR_POLL_MS` |
 
 窗口纵向覆盖主显示器 `workArea`（不压任务栏）；收起时窗口整体移出屏幕，只留 4px 在屏内。
 
@@ -70,10 +73,13 @@ E2E 会**真实移动鼠标、真实点击、真实读写剪贴板**，因此：
 
 ## 当前进度
 
-| 任务 | 状态 |
+| 轮次 | 状态 |
 |---|---|
-| 1 原生窗口行为 | ✅ 完成（54 项断言） |
-| 2 本地笔记编辑器 | ✅ 完成（33 项断言） |
-| 3 必要设置（左右切换 / 宽度拖动 / 置顶 / 固定展开） | ✅ 完成（开机启动按约定推迟到任务 5） |
-| 4 UI 精修 | 未开始 |
-| 5 打包与日常使用测试 | 未开始 |
+| 01 初始化项目 | ✅ |
+| 02 桌面边缘窗口系统 | ✅（窗口 73 项断言） |
+| 03 本地笔记与自动保存 | ✅（笔记 33 项断言） |
+| 04 面板设置与窗口交互（左右切换 / 宽度 280–600 / 收起延迟三档） | ✅ |
+| 05 UI 与视觉精修（设计 Token、头栏收敛、底栏状态、焦点环） | ✅（视觉 14 项断言 + 9 组截图） |
+| 06 打包与日常使用测试 | 未开始 |
+
+界面样式统一由 `src/renderer/styles.css` 顶部的设计 Token 驱动（颜色/间距/圆角/字号/结构尺寸），组件内不写死数值。

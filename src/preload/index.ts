@@ -9,6 +9,7 @@ const api: EdgeNotesApi = {
   setPinnedOpen: (value: boolean) => ipcRenderer.invoke(IPC_CHANNELS.setPinnedOpen, value) as Promise<EdgeNotesState>,
   setSide: (side) => ipcRenderer.invoke(IPC_CHANNELS.setSide, side) as Promise<EdgeNotesState>,
   setWidth: (width: number) => ipcRenderer.invoke(IPC_CHANNELS.setWidth, width) as Promise<EdgeNotesState>,
+  setCollapseDelay: (delay) => ipcRenderer.invoke(IPC_CHANNELS.setCollapseDelay, delay) as Promise<EdgeNotesState>,
   setResizing: (value: boolean) => {
     ipcRenderer.send(IPC_CHANNELS.setResizing, value)
   },

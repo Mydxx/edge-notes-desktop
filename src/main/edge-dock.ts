@@ -2,12 +2,13 @@ import { BrowserWindow, screen } from 'electron'
 import type { Point, Rectangle } from 'electron'
 import type { DockPhase, EdgeNotesSettings } from '../shared/api'
 import {
-  COLLAPSE_DELAY_MS,
   CURSOR_POLL_MS,
   EXPAND_ANIMATION_MS,
   FRAME_INTERVAL_MS,
   PANEL_WIDTH_MAX,
   PANEL_WIDTH_MIN,
+  SCREEN_EDGE_MARGIN,
+  SIDE_SWITCH_ANIMATION_MS,
   TRIGGER_WIDTH
 } from '../shared/constants'
 import { log } from './log'
@@ -19,8 +20,6 @@ const HIT_TOLERANCE_PX = 2
  * 留一点余量可以避免「刚松手面板就收起」这种讨厌的行为。
  */
 const PANEL_HIT_SLOP = 6
-/** 面板与屏幕边缘至少留出的空间 */
-const SCREEN_EDGE_MARGIN = 40
 
 interface DockGeometry {
   displayId: number
@@ -107,20 +106,36 @@ export class EdgeDock {
     this.settings = next
     this.win.setAlwaysOnTop(next.alwaysOnTop)
 
-    const layoutChanged = previous.side !== next.side || previous.width !== next.width
-    if (layoutChanged) {
+    const sideChanged = previous.side !== next.side
+    const widthChanged = previous.width !== next.width
+    if (sideChanged || widthChanged) {
+      const wasExpanded = this.phase === 'expanded' || this.phase === 'expanding'
       this.stopAnimation()
       this.geometry = this.computeGeometry()
-      this.phase = this.phase === 'expanded' || this.phase === 'expanding' ? 'expanded' : 'collapsed'
-      this.x = this.targetXFor(this.phase)
-      this.applyBounds(true)
-      log('layout-reapplied', {
-        phase: this.phase,
-        requested: { x: this.x, y: this.geometry.y, width: this.geometry.width, height: this.geometry.height },
-        applied: this.win.getBounds(),
-        workArea: this.geometry.area
-      })
-      this.hooks.onPhaseChange(this.phase)
+
+      if (wasExpanded && sideChanged) {
+        // 换侧：可见状态下做一次平移过渡，而不是瞬移
+        this.phase = 'expanding'
+        log('side-transition-start', { fromX: this.x, targetX: this.geometry.expandedX })
+        this.hooks.onPhaseChange(this.phase)
+        this.animateTo(this.geometry.expandedX, SIDE_SWITCH_ANIMATION_MS, () => {
+          this.phase = 'expanded'
+          log('expanded', { reason: 'side-switch', x: this.x, bounds: this.win.getBounds() })
+          this.hooks.onPhaseChange(this.phase)
+        })
+      } else {
+        // 宽度拖动必须跟手，收起态只露 4px 也无需过渡
+        this.phase = wasExpanded ? 'expanded' : 'collapsed'
+        this.x = this.targetXFor(this.phase)
+        this.applyBounds(true)
+        log('layout-reapplied', {
+          phase: this.phase,
+          requested: { x: this.x, y: this.geometry.y, width: this.geometry.width, height: this.geometry.height },
+          applied: this.win.getBounds(),
+          workArea: this.geometry.area
+        })
+        this.hooks.onPhaseChange(this.phase)
+      }
     }
 
     log('settings-applied', {
@@ -389,8 +404,8 @@ export class EdgeDock {
         return
       }
       this.collapse(`auto:${reason}`)
-    }, COLLAPSE_DELAY_MS)
-    log('collapse-scheduled', { reason, delayMs: COLLAPSE_DELAY_MS })
+    }, this.settings.collapseDelay)
+    log('collapse-scheduled', { reason, delayMs: this.settings.collapseDelay })
   }
 
   private cancelCollapse(reason: string): void {
