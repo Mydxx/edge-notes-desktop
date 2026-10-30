@@ -14,6 +14,7 @@
   --color-text-muted: #6d768a;
   --color-accent: #3b82f6;
   --color-accent-soft: rgba(59, 130, 246, 0.16);
+  --color-strip: rgba(59, 130, 246, 0.55);
   --color-danger: #ef8f8f;
   --color-danger-bg: #3a1c22;
   --color-danger-strong: #4a2229;
@@ -80,13 +81,19 @@ body {
   background: var(--color-bg);
 }
 
-/* 收起时留在屏幕上的 4px 触发条就是这条边 */
+/* 收起时留在屏幕上的 4px 触发条就是这条边。
+   静息状态用降低透明度的强调色（长期挂在屏幕边缘不至于刺眼），
+   鼠标靠近 / 面板展开时恢复到完整强调色。 */
 .panel--right {
-  border-left: var(--trigger-width) solid var(--color-accent);
+  border-left: var(--trigger-width) solid var(--color-strip);
 }
 
 .panel--left {
-  border-right: var(--trigger-width) solid var(--color-accent);
+  border-right: var(--trigger-width) solid var(--color-strip);
+}
+
+.panel:hover {
+  --color-strip: var(--color-accent);
 }
 
 /* --------------------------------------------------------------- 标题栏 */

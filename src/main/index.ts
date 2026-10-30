@@ -58,6 +58,8 @@ function broadcastNoteStatus(status: NoteStatus): void {
 }
 
 function createWindow(): BrowserWindow {
+  /** 渲染进程只自动恢复一次，连续崩溃说明环境有问题，直接退出而不是无限重载 */
+  let rendererRecovered = false
   const settings = store?.get()
   const win = new BrowserWindow({
     title: 'Edge Notes',
@@ -89,6 +91,11 @@ function createWindow(): BrowserWindow {
     mainWindow = null
   })
 
+  // 窗口失去焦点时用户不可能还在拖拽，释放标记防止卡死
+  win.on('blur', () => {
+    dock?.releaseResizeLock()
+  })
+
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   win.webContents.on('will-navigate', (event, url) => {
     const allowed = devServerUrl ? url.startsWith(devServerUrl) : url.startsWith('file://')
@@ -97,11 +104,32 @@ function createWindow(): BrowserWindow {
       log('blocked-navigation', { url })
     }
   })
-  win.webContents.on('did-fail-load', (_event, code, description, url) => {
-    log('load-failed', { code, description, url })
+  win.webContents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {
+    log('load-failed', { code, description, url, isMainFrame })
+    // -3 是用户/程序主动中断，不是失败；只有主框架真加载不出来才需要兜底页面，
+    // 否则用户面对的是一个 350px 宽、什么都没有、又没有标题栏按钮的空白窗口。
+    if (code === -3 || isMainFrame === false || win.isDestroyed()) {
+      return
+    }
+    const html = `<meta charset="utf-8"><body style="margin:0;padding:18px;background:#12151c;color:#e7eaf1;font:13px/1.7 'Microsoft YaHei UI',sans-serif">
+<div style="font-weight:600;margin-bottom:8px">界面加载失败</div>
+<div style="color:#98a1b3">${description || 'unknown error'}（${code}）</div>
+<div style="color:#6d768a;margin-top:10px">请重新执行 npm run build 后重启应用。</div>
+</body>`
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`)
   })
   win.webContents.on('render-process-gone', (_event, details) => {
     log('render-process-gone', { reason: details.reason })
+    // 渲染层已死，它不可能再发"失焦/结束拖动"，先解掉抑制标记
+    dock?.resetInteractionLocks()
+    if (rendererRecovered || win.isDestroyed()) {
+      log('renderer-gone-quit', { reason: details.reason })
+      app.quit()
+      return
+    }
+    rendererRecovered = true
+    log('renderer-reload', {})
+    win.reload()
   })
 
   if (devServerUrl) {

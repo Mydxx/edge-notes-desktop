@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'zorder-compare', 'clipboard-save', 'clipboard-set', 'clipboard-restore')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'clipboard-save', 'clipboard-set', 'clipboard-restore')][string]$Command,
   [string]$OutDir = '',
   [int]$X = -1,
   [int]$Y = -1,
@@ -34,6 +34,8 @@ public static class EdgeNative {
   [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
   [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr FindWindow(string lpClassName, string lpWindowName);
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
+  [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
+  [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT rect, int size);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
   public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   // EnumWindows 按 Z 序从上到下枚举，索引越小越靠上
@@ -179,7 +181,8 @@ switch ($Command) {
     for ($px = $from; $px -le $to; $px++) {
       $c = $bmp.GetPixel($px, $row)
       $samples += "$px=$($c.R),$($c.G),$($c.B)"
-      if ($c.B -ge 150 -and ($c.B - $c.R) -ge 60) { $accent++ }
+      # blue-dominant test: works for both the full accent color and the muted resting strip color
+      if ($c.B -ge 60 -and ($c.B - $c.R) -ge 30) { $accent++ }
     }
     $bmp.Dispose()
     "PROBE accent=$accent " + ($samples -join ' ')
@@ -282,6 +285,24 @@ switch ($Command) {
       "PANEL-TOPMOST hwnd=$hwnd topmost=$([bool]($exStyle -band 0x8))"
     }
   }
+  'panel-physical' {
+    # Visible window rect in physical pixels (DWM extended frame bounds), independent of DIP rounding.
+    if ($PanelPid -gt 0) {
+      $proc = Get-Process -Id $PanelPid -ErrorAction SilentlyContinue
+    } else {
+      $proc = Get-Process -Name electron -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -eq 'Edge Notes' } |
+        Select-Object -First 1
+    }
+    if (-not $proc) { throw 'panel process not found' }
+    $proc.Refresh()
+    $hwnd = $proc.MainWindowHandle
+    if ($hwnd -eq [IntPtr]::Zero) { throw 'panel window handle not available' }
+    $rect = New-Object EdgeNative+RECT
+    $hr = [EdgeNative]::DwmGetWindowAttribute($hwnd, 9, [ref]$rect, 16)
+    $wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+    "PANEL-PHYSICAL hr=$hr left=$($rect.Left) top=$($rect.Top) right=$($rect.Right) bottom=$($rect.Bottom) workLeft=$($wa.Left) workTop=$($wa.Top) workRight=$($wa.Right) workBottom=$($wa.Bottom)"
+  }
   'zorder-compare' {
     # 直接比较两个窗口在系统 Z 序里的位置，不依赖屏幕像素，避免被第三个窗口干扰
     if ($PanelPid -le 0 -or $TargetPid -le 0) {
@@ -325,7 +346,7 @@ switch ($Command) {
     $x = $startX
     while ($x -ge 0 -and $x -lt $img.Width) {
       $pixel = $img.GetPixel($x, $row)
-      if ($pixel.B -ge 150 -and $pixel.B - $pixel.R -ge 60) {
+      if ($pixel.B -ge 60 -and $pixel.B - $pixel.R -ge 30) {
         $run++
         $x += $step
       } else {

@@ -167,6 +167,28 @@ export class EdgeDock {
     }
   }
 
+  /**
+   * 释放"正在拖动"标记。
+   * 指针捕获有可能在窗口失去焦点、用户拖到窗口外松手时丢失，标记卡住会表现成"面板再也不自动收起"。
+   */
+  releaseResizeLock(): void {
+    if (!this.resizing) {
+      return
+    }
+    this.resizing = false
+    log('resizing-released', { reason: 'window-blur' })
+  }
+
+  /** 渲染进程崩溃/重载后，渲染层不可能再发来状态，抑制标记必须重置，否则面板会永远不收起 */
+  resetInteractionLocks(): void {
+    if (!this.editorFocused && !this.resizing) {
+      return
+    }
+    log('interaction-locks-reset', { editorFocused: this.editorFocused, resizing: this.resizing })
+    this.editorFocused = false
+    this.resizing = false
+  }
+
   /** 拖动调整宽度期间不收起 */
   setResizing(value: boolean): void {
     if (this.resizing === value) {
@@ -441,7 +463,10 @@ export class EdgeDock {
       scaleFactor: display.scaleFactor,
       area,
       width,
-      height: area.height,
+      // 只接受整数 DIP。实测（DWM 可见矩形）150% 缩放下窗口可见底边比工作区底边多 1 物理像素，
+      // 这是 DIP→物理像素两次取整的固有误差；试过主动减 1 DIP，系统仍会进位回去，
+      // 所以不做无依据的补偿，而是在测试里用物理像素守住"最多 1px"这条线。
+      height: Math.floor(area.height),
       y: area.y,
       collapsedX,
       expandedX

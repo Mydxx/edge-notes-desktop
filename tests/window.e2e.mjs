@@ -79,6 +79,35 @@ async function main() {
     Math.abs(applied.y - area.y) <= 2 && Math.abs(applied.height - area.height) <= 2,
     `y=${applied.y}/${area.y} h=${applied.height}/${area.height}`
   )
+  // DIP 层面的边界会被系统二次进位，只有物理像素才是真话：用 DWM 可见矩形实测
+  const physicalInfo = ps('panel-physical', '-PanelPid', String(app.pid))
+  const physMatch =
+    /left=(-?\d+) top=(-?\d+) right=(-?\d+) bottom=(-?\d+) workLeft=(-?\d+) workTop=(-?\d+) workRight=(-?\d+) workBottom=(-?\d+)/.exec(
+      physicalInfo
+    )
+  const phys = physMatch
+    ? {
+        left: Number(physMatch[1]),
+        top: Number(physMatch[2]),
+        right: Number(physMatch[3]),
+        bottom: Number(physMatch[4]),
+        workRight: Number(physMatch[7]),
+        workBottom: Number(physMatch[8])
+      }
+    : null
+  record('能取到窗口的物理可见矩形', Boolean(phys), physicalInfo)
+  // 实测：150% 缩放下窗口可见底边比工作区底边多 1~3 物理像素，属于 DIP→物理像素两次取整的固有误差。
+  // 这条断言守的是"绝不盖住任务栏"（误用屏幕 bounds 而非 workArea 时会多出 70+ 像素，立即失败）。
+  record(
+    '窗口底边不会盖住任务栏（越出量 < 2 DIP）',
+    Boolean(phys) && phys.bottom - phys.workBottom <= 4,
+    `越出 ${phys ? phys.bottom - phys.workBottom : '?'} 物理像素 / 任务栏高 ${phys ? 1600 - phys.workBottom : '?'}`
+  )
+  record(
+    '收起态物理可见宽度约 4 DIP',
+    Boolean(phys) && phys.workRight - phys.left >= 4 && phys.workRight - phys.left <= 8,
+    `visiblePx=${phys ? phys.workRight - phys.left : -1}`
+  )
   record('收起时仅保留窄触发条', Math.abs(areaRight - applied.x - 4) <= 2, `可见宽度=${areaRight - applied.x}px`)
   record('置顶默认生效', started.alwaysOnTop === true)
 

@@ -144,6 +144,23 @@ export default function App() {
     }
   }, [settingsOpen])
 
+  // 面板真正收起后关掉设置浮层，否则下次展开时它会又挂在那里
+  const wasExpandedRef = useRef(false)
+  const phase = state?.runtime.phase
+  useEffect(() => {
+    if (!phase) {
+      return
+    }
+    if (phase === 'expanded' || phase === 'expanding') {
+      wasExpandedRef.current = true
+      return
+    }
+    if (phase === 'collapsed' && wasExpandedRef.current) {
+      wasExpandedRef.current = false
+      setSettingsOpen(false)
+    }
+  }, [phase])
+
   // 拖动内缘调整宽度：锚点取贴边那一侧的屏幕坐标，宽度由指针位置直接算出，避免累积误差
   const handleResizeStart = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
