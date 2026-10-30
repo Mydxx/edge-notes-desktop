@@ -3,7 +3,14 @@ import type { IpcMainInvokeEvent } from 'electron'
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { IPC_CHANNELS } from '../shared/api'
-import type { DockPhase, DockSide, EdgeNotesSettings, EdgeNotesState, NoteStatus } from '../shared/api'
+import type {
+  DockPhase,
+  DockSide,
+  EdgeNotesSettings,
+  EdgeNotesState,
+  NotesIndexState,
+  NoteStatus
+} from '../shared/api'
 import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
 import {
   attachmentExists,
@@ -58,7 +65,8 @@ function buildState(): EdgeNotesState {
     launchAtLogin: false,
     theme: 'light',
     fontSize: 'normal',
-    viewMode: 'edit'
+    viewMode: 'edit',
+    navCollapsed: false
   }
   const phase = currentPhase()
   return {
@@ -71,6 +79,13 @@ function buildState(): EdgeNotesState {
       collapseDelayMs: settings.collapseDelay
     }
   }
+}
+
+function broadcastNotesIndex(index: NotesIndexState): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return
+  }
+  mainWindow.webContents.send(IPC_CHANNELS.notesIndexChanged, index)
 }
 
 function broadcast(): void {
@@ -322,6 +337,11 @@ function registerIpc(): void {
     if (value !== 'edit' && value !== 'preview') {
       throw new TypeError('viewMode must be edit / preview')
     }
+    // 既更新"新笔记的默认值"，也写进当前这篇笔记，保证外部调用语义一致
+    if (notes) {
+      notes.setViewState(notes.state().activeId, { viewMode: value })
+      broadcastNotesIndex(notes.state())
+    }
     return applySettings({ viewMode: value })
   })
 
@@ -415,6 +435,114 @@ function registerIpc(): void {
     return notes.writeNow()
   })
 
+  ipcMain.handle(IPC_CHANNELS.notesList, (event) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    return notes.state()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.notesCreate, (event, title: unknown) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    const result = notes.create(typeof title === 'string' ? title : undefined)
+    broadcastNotesIndex(result.index)
+    return result
+  })
+
+  ipcMain.handle(IPC_CHANNELS.notesSwitch, (event, id: unknown) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    if (typeof id !== 'string') {
+      throw new TypeError('note id must be a string')
+    }
+    const result = notes.switchTo(id)
+    broadcastNotesIndex(result.index)
+    return result
+  })
+
+  ipcMain.handle(IPC_CHANNELS.notesRename, (event, id: unknown, title: unknown) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    if (typeof id !== 'string' || typeof title !== 'string') {
+      throw new TypeError('rename requires id and title strings')
+    }
+    const index = notes.rename(id, title)
+    broadcastNotesIndex(index)
+    return index
+  })
+
+  ipcMain.handle(IPC_CHANNELS.notesDelete, (event, id: unknown) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    if (typeof id !== 'string') {
+      throw new TypeError('note id must be a string')
+    }
+    const result = notes.remove(id)
+    broadcastNotesIndex(result.index)
+    return result
+  })
+
+  ipcMain.handle(IPC_CHANNELS.notesReorder, (event, ids: unknown) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    if (!Array.isArray(ids) || ids.some((item) => typeof item !== 'string')) {
+      throw new TypeError('reorder requires an array of ids')
+    }
+    const index = notes.reorder(ids as string[])
+    broadcastNotesIndex(index)
+    return index
+  })
+
+  ipcMain.on(IPC_CHANNELS.notesViewState, (event, id: unknown, patch: unknown) => {
+    if (!mainWindow || event.sender !== mainWindow.webContents || !notes) {
+      return
+    }
+    if (typeof id !== 'string' || !patch || typeof patch !== 'object') {
+      return
+    }
+    const input = patch as Record<string, unknown>
+    notes.setViewState(id, {
+      viewMode: input.viewMode === 'preview' ? 'preview' : input.viewMode === 'edit' ? 'edit' : undefined,
+      scrollTop: typeof input.scrollTop === 'number' ? input.scrollTop : undefined,
+      caret: typeof input.caret === 'number' ? input.caret : undefined
+    })
+  })
+
+  ipcMain.handle(IPC_CHANNELS.referencedAttachments, (event) => {
+    requireSender(event)
+    if (!notes) {
+      throw new Error('edge-notes: notes store not ready')
+    }
+    // 跨全部笔记收集引用，避免把别的笔记还在用的图片清掉
+    const referenced = new Set<string>()
+    for (const content of notes.allContents()) {
+      for (const match of content.matchAll(/attachments\/[^\s)"']+/g)) {
+        referenced.add(match[0])
+      }
+    }
+    return [...referenced]
+  })
+
+  ipcMain.handle(IPC_CHANNELS.setNavCollapsed, (event, value: unknown) => {
+    requireSender(event)
+    if (typeof value !== 'boolean') {
+      throw new TypeError('navCollapsed must be a boolean')
+    }
+    return applySettings({ navCollapsed: value })
+  })
+
   ipcMain.handle(IPC_CHANNELS.saveAttachment, (event, bytes: unknown, mime: unknown) => {
     requireSender(event)
     if (!(bytes instanceof Uint8Array)) {
@@ -485,7 +613,11 @@ async function bootstrap(): Promise<void> {
   log('app-ready', {
     userData: app.getPath('userData'),
     settingsFile: store.getPath(),
-    noteFile: notes.getFilePath(),
+    notesIndex: notes.getIndexPath(),
+    notesDir: notes.getNotesDir(),
+    notesCount: notes.state().notes.length,
+    activeNoteId: notes.state().activeId,
+    migrationWarning: notes.getMigrationWarning(),
     settings: store.get(),
     logFile: process.env.EDGE_NOTES_LOG ?? ''
   })

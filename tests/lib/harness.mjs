@@ -1,6 +1,6 @@
 // 验证脚本共用的启动/断言/驱动工具
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import process from 'node:process'
 import { fileURLToPath } from 'node:url'
@@ -146,6 +146,46 @@ export async function waitCollapsed(page, parkX = 200, parkY = 300, attempts = 4
  */
 export function quitApp(page) {
   void page.send('Runtime.evaluate', { expression: 'window.edgeNotes.quit()' }).catch(() => undefined)
+}
+
+/** 读索引文件（多笔记结构） */
+export function readNotesIndex(userDataDir) {
+  const indexPath = path.join(userDataDir, 'notes-index.json')
+  if (!existsSync(indexPath)) {
+    return null
+  }
+  try {
+    return JSON.parse(readFileSync(indexPath, 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/** 读当前活动笔记的正文 */
+export function readActiveNote(userDataDir) {
+  const index = readNotesIndex(userDataDir)
+  if (!index?.activeId) {
+    return null
+  }
+  const filePath = path.join(userDataDir, 'notes', `${index.activeId}.md`)
+  return existsSync(filePath) ? readFileSync(filePath, 'utf8') : null
+}
+
+/** 按 id 读某一篇笔记的正文 */
+export function readNoteById(userDataDir, id) {
+  const filePath = path.join(userDataDir, 'notes', `${id}.md`)
+  return existsSync(filePath) ? readFileSync(filePath, 'utf8') : null
+}
+
+/** 按标题读某一篇笔记的正文（找不到返回 null） */
+export function readNoteByTitle(userDataDir, title) {
+  const index = readNotesIndex(userDataDir)
+  const meta = index?.notes?.find((note) => note.title === title)
+  if (!meta) {
+    return null
+  }
+  const filePath = path.join(userDataDir, 'notes', `${meta.id}.md`)
+  return existsSync(filePath) ? readFileSync(filePath, 'utf8') : null
 }
 
 export function runCleanup() {

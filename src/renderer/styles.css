@@ -139,9 +139,209 @@ body {
 .panel {
   position: relative;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100%;
   background: var(--color-bg);
+}
+
+/* 右侧主区域：头栏 + 编辑/预览 + 底栏 */
+.pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  height: 100%;
+}
+
+/* ---------------------------------------------------------- 笔记导航 */
+
+.notesNav {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  width: var(--nav-width, 148px);
+  border-right: 1px solid var(--color-border);
+  /* 与正文同色，只用一条分隔线区分，避免一条深色竖带把界面压重 */
+  background: transparent;
+  transition: width 0.16s ease;
+}
+
+.notesNav--collapsed {
+  width: 40px;
+}
+
+.notesNav__head {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--bar-height);
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.notesNav__label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--color-text-muted);
+}
+
+.notesNav__list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: var(--space-2) var(--space-2);
+}
+
+.noteRow {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  margin-bottom: 1px;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-sm);
+  color: var(--color-text-dim);
+  font-size: var(--text-sm);
+  cursor: default;
+  user-select: none;
+}
+
+.noteRow:hover {
+  background: var(--color-hover);
+}
+
+.noteRow--active {
+  background: var(--color-accent-soft);
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+/* 选中项左侧的强调条，位置稳定，不因标题长度变化 */
+.noteRow--active::before {
+  content: '';
+  position: absolute;
+  top: 6px;
+  bottom: 6px;
+  left: 0;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--color-accent);
+}
+
+.noteRow--dragging {
+  opacity: 0.65;
+}
+
+.noteRow__mark {
+  flex: none;
+  width: 16px;
+  font-size: var(--text-xs);
+  color: var(--color-text-muted);
+  text-align: center;
+}
+
+.noteRow--active .noteRow__mark {
+  color: var(--color-accent);
+}
+
+.noteRow__title {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.noteRow__del {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+
+.noteRow:hover .noteRow__del {
+  opacity: 1;
+}
+
+.noteRow__del:hover {
+  background: var(--color-danger-quiet);
+  color: var(--color-danger-text);
+}
+
+.noteRow__input {
+  width: 100%;
+  min-width: 0;
+  padding: 2px var(--space-2);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-raised);
+  color: var(--color-text);
+  font: inherit;
+  outline: none;
+}
+
+/* 收起态：只显示首字，标签与删除按钮都藏起来 */
+.notesNav--collapsed .notesNav__list {
+  padding: var(--space-2) 4px;
+}
+
+.notesNav--collapsed .noteRow {
+  justify-content: center;
+  padding: 0;
+}
+
+.notesNav--collapsed .noteRow__title,
+.notesNav--collapsed .noteRow__del {
+  display: none;
+}
+
+.notesNav--collapsed .noteRow__mark {
+  width: auto;
+  font-size: var(--text-sm);
+}
+
+.notesNav__new {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-2);
+  height: 30px;
+  margin: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.notesNav__new:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.notesNav--collapsed .notesNav__new {
+  justify-content: center;
+  padding: 0;
+  margin: var(--space-2) 4px;
+}
+
+.notesNav__plus {
+  font-size: 14px;
+  line-height: 1;
 }
 
 /* 收起时留在屏幕上的 4px 触发条就是这条边。

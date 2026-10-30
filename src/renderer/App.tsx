@@ -2,7 +2,17 @@ import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ClipboardEvent as ReactClipboardEvent, PointerEvent as ReactPointerEvent } from 'react'
-import type { CollapseDelay, DataDirInfo, EdgeNotesState, LoginItemState, NoteStatus } from '../shared/api'
+import type {
+  CollapseDelay,
+  DataDirInfo,
+  EdgeNotesState,
+  LoginItemState,
+  NoteMeta,
+  NotesIndexState,
+  NoteSnapshot,
+  NoteStatus,
+  ViewMode
+} from '../shared/api'
 import { COLLAPSE_DELAY_OPTIONS } from '../shared/constants'
 
 const EMPTY_STATUS: NoteStatus = { state: 'idle', savedAt: null, message: null }
@@ -60,6 +70,25 @@ function IconPencil() {
   )
 }
 
+function IconChevron({ collapsed }: { collapsed: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="13"
+      height="13"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+      style={{ transform: collapsed ? 'rotate(180deg)' : 'none', transition: 'transform 0.15s ease' }}
+    >
+      <path d="M9.8 3.6 5.4 8l4.4 4.4" />
+    </svg>
+  )
+}
+
 function IconMinimize() {
   return (
     <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
@@ -83,6 +112,12 @@ export default function App() {
   const [attachError, setAttachError] = useState<string | null>(null)
   const [zoomed, setZoomed] = useState<string | null>(null)
   const [prune, setPrune] = useState<{ count: number; bytes: number; relatives: string[] } | null>(null)
+  const [notes, setNotes] = useState<NotesIndexState | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const [pendingDelete, setPendingDelete] = useState<NoteMeta | null>(null)
+  const [draggingId, setDraggingId] = useState<string | null>(null)
+  const dragNoteRef = useRef<{ id: string; startY: number; rowHeight: number } | null>(null)
   const previewRef = useRef<HTMLDivElement | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
   const loadedRef = useRef(false)
@@ -141,6 +176,32 @@ export default function App() {
       .catch((reason: unknown) => {
         if (alive) {
           setStatus({ state: 'error', savedAt: null, message: reason instanceof Error ? reason.message : String(reason) })
+        }
+      })
+    return () => {
+      alive = false
+      unsubscribe()
+    }
+  }, [])
+
+  // 笔记索引：初次拉取 + 订阅变更（新建/重命名/删除/排序后主进程会广播）
+  useEffect(() => {
+    let alive = true
+    const unsubscribe = window.edgeNotes.onNotesIndexChanged((next) => {
+      if (alive) {
+        setNotes(next)
+      }
+    })
+    window.edgeNotes
+      .listNotes()
+      .then((index) => {
+        if (alive) {
+          setNotes(index)
+        }
+      })
+      .catch((reason: unknown) => {
+        if (alive) {
+          setAttachError(reason instanceof Error ? reason.message : String(reason))
         }
       })
     return () => {
@@ -405,15 +466,196 @@ export default function App() {
     [renderMarkdown]
   )
 
-  const viewMode = state?.settings.viewMode ?? 'edit'
+  /** 记录当前笔记的光标与滚动位置（切走前调用，切回来能接着看） */
+  const captureViewState = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor || !notes) {
+      return
+    }
+    window.edgeNotes.setNoteViewState(notes.activeId, {
+      caret: editor.selectionStart,
+      scrollTop: editor.scrollTop
+    })
+  }, [notes])
+
+  /** 光标/滚动变化后节流保存，保证退出前最后一次位置也记下来 */
+  const viewStateTimer = useRef<number | null>(null)
+  const scheduleViewState = useCallback(() => {
+    if (viewStateTimer.current !== null) {
+      window.clearTimeout(viewStateTimer.current)
+    }
+    viewStateTimer.current = window.setTimeout(() => {
+      viewStateTimer.current = null
+      captureViewState()
+    }, 400)
+  }, [captureViewState])
+
+  /** 编辑区当前装载的是哪一篇笔记；用于识别"外部把 activeId 改了"的情况 */
+  const loadedNoteIdRef = useRef<string | null>(null)
+
+  // 主进程广播的 activeId 与编辑区内容不一致时（例如托盘/其它入口切换了笔记），重新拉取正文。
+  // 没有这一步，后续任何一次输入都会把旧笔记的内容写进新笔记。
+  useEffect(() => {
+    if (!notes) {
+      return
+    }
+    if (loadedNoteIdRef.current === null) {
+      loadedNoteIdRef.current = notes.activeId
+      return
+    }
+    if (loadedNoteIdRef.current === notes.activeId) {
+      return
+    }
+    loadedNoteIdRef.current = notes.activeId
+    const meta = notes.notes.find((note) => note.id === notes.activeId)
+    void window.edgeNotes
+      .getNote()
+      .then((snapshot) => {
+        const editor = editorRef.current
+        if (editor && editor.value !== snapshot.content) {
+          editor.value = snapshot.content
+        }
+        setStatus(snapshot.status)
+        setContentVersion((version) => version + 1)
+        if (editor && meta) {
+          const caret = Math.min(meta.caret, editor.value.length)
+          editor.setSelectionRange(caret, caret)
+          editor.scrollTop = meta.scrollTop
+        }
+      })
+      .catch(() => undefined)
+  }, [notes])
+
+  /** 首次加载完成后，把上次的光标与滚动位置还原到编辑区 */
+  const restoredRef = useRef(false)
+  useEffect(() => {
+    if (restoredRef.current || !notes || !loadedRef.current) {
+      return
+    }
+    const editor = editorRef.current
+    if (!editor) {
+      return
+    }
+    const meta = notes.notes.find((note) => note.id === notes.activeId)
+    if (!meta) {
+      return
+    }
+    restoredRef.current = true
+    const caret = Math.min(meta.caret, editor.value.length)
+    editor.setSelectionRange(caret, caret)
+    editor.scrollTop = meta.scrollTop
+  }, [notes, contentVersion])
+
+  /** 切换/新建/删除后：替换正文、恢复光标与滚动、重建预览 */
+  const applyNote = useCallback((index: NotesIndexState, snapshot: NoteSnapshot) => {
+    loadedNoteIdRef.current = index.activeId
+    setNotes(index)
+    const editor = editorRef.current
+    const meta = index.notes.find((note) => note.id === index.activeId)
+    if (editor && editor.value !== snapshot.content) {
+      editor.value = snapshot.content
+    }
+    if (editor && meta) {
+      const caret = Math.min(meta.caret, editor.value.length)
+      editor.focus()
+      editor.setSelectionRange(caret, caret)
+      editor.scrollTop = meta.scrollTop
+    }
+    setStatus(snapshot.status)
+    setContentVersion((version) => version + 1)
+  }, [])
+
+  const switchTo = useCallback(
+    async (id: string) => {
+      if (!notes || id === notes.activeId) {
+        return
+      }
+      captureViewState()
+      setRenamingId(null)
+      try {
+        const result = await window.edgeNotes.switchNote(id)
+        applyNote(result.index, result.note)
+      } catch (reason) {
+        setAttachError(reason instanceof Error ? reason.message : String(reason))
+      }
+    },
+    [applyNote, captureViewState, notes]
+  )
+
+  const createNote = useCallback(async () => {
+    captureViewState()
+    try {
+      const result = await window.edgeNotes.createNote()
+      // 不自动进入改名：Ctrl+N 之后用户多半想写内容，焦点必须落在正文
+      applyNote(result.index, result.note)
+    } catch (reason) {
+      setAttachError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [applyNote, captureViewState])
+
+  const commitRename = useCallback(async (id: string, draft: string) => {
+    setRenamingId(null)
+    try {
+      setNotes(await window.edgeNotes.renameNote(id, draft))
+    } catch (reason) {
+      setAttachError(reason instanceof Error ? reason.message : String(reason))
+    }
+  }, [])
+
+  const deleteNote = useCallback(
+    async (id: string) => {
+      setPendingDelete(null)
+      try {
+        const result = await window.edgeNotes.deleteNote(id)
+        applyNote(result.index, result.note)
+      } catch (reason) {
+        setAttachError(reason instanceof Error ? reason.message : String(reason))
+      }
+    },
+    [applyNote]
+  )
+
+  const moveNote = useCallback(
+    async (from: number, to: number) => {
+      if (!notes || from === to || to < 0 || to >= notes.notes.length) {
+        return
+      }
+      const ids = notes.notes.map((note) => note.id)
+      const [moved] = ids.splice(from, 1)
+      ids.splice(to, 0, moved)
+      // 先把本地顺序改掉（拖动手感），再让主进程落盘
+      setNotes({ ...notes, notes: ids.map((id) => notes.notes.find((note) => note.id === id)!) })
+      try {
+        setNotes(await window.edgeNotes.reorderNotes(ids))
+      } catch (reason) {
+        setAttachError(reason instanceof Error ? reason.message : String(reason))
+        setNotes(await window.edgeNotes.listNotes().catch(() => notes))
+      }
+    },
+    [notes]
+  )
+
+  const activeNote = notes?.notes.find((note) => note.id === notes.activeId) ?? null
+  // 每篇笔记各记各的模式；settings.viewMode 只作为新笔记的默认值（向后兼容）
+  const viewMode: ViewMode = activeNote?.viewMode ?? state?.settings.viewMode ?? 'edit'
   const preview = viewMode === 'preview'
 
-  const setView = useCallback((mode: 'edit' | 'preview') => {
-    void window.edgeNotes
-      .setViewMode(mode)
-      .then(setState)
-      .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
-  }, [])
+  const setView = useCallback(
+    (mode: ViewMode) => {
+      void window.edgeNotes
+        .setViewMode(mode)
+        .then(setState)
+        .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
+      if (notes) {
+        window.edgeNotes.setNoteViewState(notes.activeId, { viewMode: mode })
+        setNotes({
+          ...notes,
+          notes: notes.notes.map((note) => (note.id === notes.activeId ? { ...note, viewMode: mode } : note))
+        })
+      }
+    },
+    [notes]
+  )
 
   const togglePreview = useCallback(async () => {
     if (viewMode === 'preview') {
@@ -476,21 +718,69 @@ export default function App() {
     }
   }, [preview, previewHtml, replaceWithMissing])
 
-  // Ctrl/Cmd+E 在编辑与预览之间切换
+  /** 上一篇 / 下一篇（循环） */
+  const stepNote = useCallback(
+    (delta: number) => {
+      if (!notes || notes.notes.length < 2) {
+        return
+      }
+      const current = notes.notes.findIndex((note) => note.id === notes.activeId)
+      if (current < 0) {
+        return
+      }
+      const next = notes.notes[(current + delta + notes.notes.length) % notes.notes.length]
+      void switchTo(next.id)
+    },
+    [notes, switchTo]
+  )
+
+  /** Ctrl+S：立刻落盘当前笔记 */
+  const saveNow = useCallback(() => {
+    const editor = editorRef.current
+    if (!editor) {
+      return
+    }
+    void window.edgeNotes
+      .saveNoteNow(editor.value)
+      .then(setStatus)
+      .catch((reason: unknown) => setAttachError(reason instanceof Error ? reason.message : String(reason)))
+  }, [])
+
+  // 快捷键：Ctrl+E 预览、Ctrl+N 新建、Ctrl+S 立即保存、Ctrl+Tab / Ctrl+Shift+Tab 切换笔记
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') {
         setZoomed(null)
         return
       }
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'e') {
+      const mod = event.ctrlKey || event.metaKey
+      if (!mod) {
+        return
+      }
+      const key = event.key.toLowerCase()
+      if (key === 'e') {
         event.preventDefault()
         void togglePreview()
+        return
+      }
+      if (key === 'n') {
+        event.preventDefault()
+        void createNote()
+        return
+      }
+      if (key === 's') {
+        event.preventDefault()
+        saveNow()
+        return
+      }
+      if (event.key === 'Tab') {
+        event.preventDefault()
+        stepNote(event.shiftKey ? -1 : 1)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [togglePreview])
+  }, [createNote, saveNow, stepNote, togglePreview])
 
   /** 剪贴板里的图片落盘，并在光标处插入 Markdown 图片语法 */
   const handlePaste = useCallback(async (event: ReactClipboardEvent<HTMLTextAreaElement>) => {
@@ -534,8 +824,8 @@ export default function App() {
   const handleScanAttachments = useCallback(async () => {
     try {
       const files = await window.edgeNotes.listAttachments()
-      const source = editorRef.current?.value ?? ''
-      const referenced = new Set(source.match(/attachments\/[^\s)"']+/g) ?? [])
+      // 跨全部笔记统计引用：只看当前笔记会误删别的笔记还在用的图片
+      const referenced = new Set(await window.edgeNotes.getReferencedAttachments())
       const unused = files.filter((file) => !referenced.has(file.relative))
       setConfirmingClear(false)
       if (unused.length === 0) {
@@ -570,6 +860,9 @@ export default function App() {
   }, [prune])
 
   const settings = state?.settings
+  // 面板过窄时导航必须自动收起，否则正文只剩一百多像素
+  const navAutoCollapsed = (settings?.width ?? 350) < 340
+  const navCollapsed = (settings?.navCollapsed ?? false) || navAutoCollapsed
   const alwaysOnTop = settings?.alwaysOnTop ?? false
   const pinnedOpen = settings?.pinnedOpen ?? false
 
@@ -577,7 +870,10 @@ export default function App() {
     status.state === 'saving' ? '保存中' : status.state === 'error' ? '保存失败' : status.savedAt ? '已保存' : ''
 
   return (
-    <div className={`panel panel--${settings?.side ?? 'right'}`}>
+    <div
+      className={`panel panel--${settings?.side ?? 'right'}`}
+      data-narrow={settings ? settings.width < 340 : false}
+    >
       {/* 内缘拖拽把手：只在面板朝桌面那一侧，不与屏幕边缘的 4px 触发条重叠 */}
       <div
         id="resize-handle"
@@ -589,6 +885,144 @@ export default function App() {
         onPointerCancel={handleResizeEnd}
       />
 
+      <nav
+        className={`notesNav${navCollapsed ? ' notesNav--collapsed' : ''}`}
+        id="notes-nav"
+        aria-label="笔记列表"
+      >
+        <div className="notesNav__head">
+          <button
+            id="toggle-nav"
+            type="button"
+            className="iconBtn iconBtn--sm"
+            aria-pressed={navCollapsed}
+            disabled={navAutoCollapsed}
+            aria-label={navCollapsed ? '展开笔记列表' : '收起笔记列表'}
+            title={navAutoCollapsed ? '面板过窄，导航已自动收起；加宽面板后可展开' : navCollapsed ? '展开笔记列表' : '收起笔记列表'}
+            onClick={() => {
+              void applySettings(() => window.edgeNotes.setNavCollapsed(!navCollapsed))
+            }}
+          >
+            <IconChevron collapsed={navCollapsed} />
+          </button>
+          {navCollapsed ? null : <span className="notesNav__label">笔记</span>}
+        </div>
+
+        <div className="notesNav__list" id="notes-list">
+          {(notes?.notes ?? []).map((note, index) => {
+            const active = note.id === notes?.activeId
+            const renaming = renamingId === note.id
+            return (
+              <div
+                key={note.id}
+                id={`note-row-${note.id}`}
+                className={`noteRow${active ? ' noteRow--active' : ''}${draggingId === note.id ? ' noteRow--dragging' : ''}`}
+                data-note-id={note.id}
+                title={renaming ? undefined : note.title}
+                onPointerDown={(event) => {
+                  if (renaming || event.button !== 0) {
+                    return
+                  }
+                  dragNoteRef.current = {
+                    id: note.id,
+                    startY: event.clientY,
+                    rowHeight: event.currentTarget.offsetHeight || 30
+                  }
+                }}
+                onPointerMove={(event) => {
+                  const drag = dragNoteRef.current
+                  if (!drag || drag.id !== note.id) {
+                    return
+                  }
+                  const delta = Math.round((event.clientY - drag.startY) / drag.rowHeight)
+                  const total = notes?.notes.length ?? 1
+                  const target = Math.max(0, Math.min(total - 1, index + delta))
+                  if (target !== index) {
+                    // 往上/下拖过半行就换位，并以当前位置为新起点，避免一次性跳太多
+                    setDraggingId(note.id)
+                    dragNoteRef.current = { ...drag, startY: event.clientY }
+                    void moveNote(index, target)
+                  }
+                }}
+                onPointerUp={() => {
+                  dragNoteRef.current = null
+                  setDraggingId(null)
+                }}
+                onPointerCancel={() => {
+                  dragNoteRef.current = null
+                  setDraggingId(null)
+                }}
+                onClick={() => {
+                  if (!draggingId) {
+                    void switchTo(note.id)
+                  }
+                }}
+                onDoubleClick={() => {
+                  setRenamingId(note.id)
+                  setRenameDraft(note.title)
+                }}
+              >
+                {renaming ? (
+                  <input
+                    id={`rename-input`}
+                    className="noteRow__input"
+                    value={renameDraft}
+                    autoFocus
+                    maxLength={60}
+                    onChange={(event) => setRenameDraft(event.target.value)}
+                    onBlur={() => void commitRename(note.id, renameDraft)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') {
+                        event.preventDefault()
+                        void commitRename(note.id, renameDraft)
+                      }
+                      if (event.key === 'Escape') {
+                        event.preventDefault()
+                        setRenamingId(null)
+                      }
+                    }}
+                  />
+                ) : (
+                  <>
+                    <span className="noteRow__mark" aria-hidden="true">
+                      {note.title.slice(0, 1)}
+                    </span>
+                    <span className="noteRow__title">{note.title}</span>
+                    <button
+                      type="button"
+                      className="noteRow__del"
+                      aria-label={`删除 ${note.title}`}
+                      title="删除笔记"
+                      onPointerDown={(event) => event.stopPropagation()}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        setPendingDelete(note)
+                      }}
+                    >
+                      ×
+                    </button>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </div>
+
+        <button
+          id="new-note"
+          type="button"
+          className="notesNav__new"
+          title="新建笔记（Ctrl+N）"
+          onClick={() => void createNote()}
+        >
+          <span className="notesNav__plus" aria-hidden="true">
+            +
+          </span>
+          {navCollapsed ? null : <span>新建笔记</span>}
+        </button>
+      </nav>
+
+      <div className="pane">
       <header className="bar">
         <span className="bar__title">Edge Notes</span>
         <span className="bar__spacer" />
@@ -799,6 +1233,23 @@ export default function App() {
         </div>
       ) : null}
 
+      {pendingDelete ? (
+        <div className="confirm">
+          <span className="confirm__text">删除「{pendingDelete.title}」？会移入回收站，可还原。</span>
+          <button id="note-delete-cancel" type="button" className="textBtn" onClick={() => setPendingDelete(null)}>
+            取消
+          </button>
+          <button
+            id="note-delete-confirm"
+            type="button"
+            className="textBtn textBtn--danger"
+            onClick={() => void deleteNote(pendingDelete.id)}
+          >
+            删除
+          </button>
+        </div>
+      ) : null}
+
       {prune ? (
         <div className="confirm">
           <span className="confirm__text">
@@ -831,11 +1282,13 @@ export default function App() {
         ref={editorRef}
         id="note-editor"
         className={`editor${preview ? ' editor--hidden' : ''}`}
-        placeholder="随手记点什么…（支持 Markdown，直接粘贴截图）"
+        placeholder="随手记点什么…"
         spellCheck={false}
         autoComplete="off"
         onChange={(event) => window.edgeNotes.updateNote(event.target.value)}
         onPaste={(event) => void handlePaste(event)}
+        onSelect={scheduleViewState}
+        onScroll={scheduleViewState}
         onFocus={() => window.edgeNotes.setEditorFocused(true)}
         onBlur={() => window.edgeNotes.setEditorFocused(false)}
       />
@@ -895,6 +1348,7 @@ export default function App() {
           <IconMinimize />
         </button>
       </footer>
+      </div>
     </div>
   )
 }

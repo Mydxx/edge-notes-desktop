@@ -15,6 +15,8 @@ import {
   launchApp,
   ps,
   quitApp,
+  readActiveNote,
+  readNotesIndex,
   resetArtifacts,
   runCleanup,
   waitChildExit,
@@ -90,8 +92,7 @@ async function main() {
     // 隐藏不丢内容：既要内存里有，也要真的落盘
     const noteWhileHidden = await page.evaluate('window.edgeNotes.getNote()')
     await delay(900)
-    const noteFilePath = path.join(userDataDir, 'edge-notes-note.md')
-    const onDisk = existsSync(noteFilePath) ? readFileSync(noteFilePath, 'utf8') : ''
+    const onDisk = readActiveNote(userDataDir) ?? ''
     record('隐藏期间内容仍在内存', noteWhileHidden.content.includes('隐藏到托盘前的测试内容'), `${noteWhileHidden.content.length} 字`)
     record('隐藏期间内容已落盘', onDisk.includes('隐藏到托盘前的测试内容'), `${onDisk.length} 字`)
 
@@ -210,7 +211,11 @@ async function main() {
       writeFileSync(path.join(sourceAttachments, 'probe.png'), Buffer.from('89504e470d0a1a0a', 'hex'))
 
       const migrated = await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(migrateTarget)})`)
-      const noteInTarget = path.join(migrateTarget, 'edge-notes-note.md')
+      const targetIndex = readNotesIndex(migrateTarget)
+      const targetNotePath = targetIndex?.activeId
+        ? path.join(migrateTarget, 'notes', `${targetIndex.activeId}.md`)
+        : path.join(migrateTarget, 'notes', 'missing.md')
+      const noteInTarget = targetNotePath
       const settingsInTarget = path.join(migrateTarget, 'edge-notes-settings.json')
       record(
         '迁移后新目录里数据齐全',
@@ -225,8 +230,10 @@ async function main() {
       )
       // 逐文件 SHA-256 比对：内容必须完全一致，而不只是"大小差不多"
       const sha = (filePath) => createHash('sha256').update(readFileSync(filePath)).digest('hex')
+      const sourceIndex = readNotesIndex(userDataDir)
       const pairs = [
-        ['edge-notes-note.md'],
+        [path.join('notes', `${sourceIndex.activeId}.md`)],
+        ['notes-index.json'],
         ['edge-notes-settings.json'],
         [path.join('attachments', 'probe.png')]
       ]
@@ -253,7 +260,7 @@ async function main() {
       // 目标是一个文件而不是目录：迁移必须失败，且原数据与指针都不能被动过
       const badTarget = path.join(artifactsDir, 'desktop-not-a-dir.txt')
       writeFileSync(badTarget, 'not a directory', 'utf8')
-      const noteBefore = readFileSync(path.join(userDataDir, 'edge-notes-note.md'), 'utf8')
+      const noteBefore = readActiveNote(userDataDir) ?? ''
       let invalidTargetError = null
       try {
         await page2.evaluate(`window.edgeNotes.setDataDir(${JSON.stringify(badTarget)})`)
@@ -267,7 +274,7 @@ async function main() {
       )
       record(
         '迁移失败不破坏原数据与指针',
-        readFileSync(path.join(userDataDir, 'edge-notes-note.md'), 'utf8') === noteBefore &&
+        (readActiveNote(userDataDir) ?? '') === noteBefore &&
           (existsSync(pointerFile) ? JSON.parse(readFileSync(pointerFile, 'utf8')).dataDir : null) === migrateTarget,
         `note=${noteBefore.length} 字`
       )
@@ -318,7 +325,7 @@ async function main() {
       record(
         '旧版 .txt 笔记自动迁移为 .md 且内容不变',
         legacyNote.content.includes('这段内容必须原样保留') &&
-          existsSync(path.join(legacyDir, 'edge-notes-note.md')) &&
+          (readNotesIndex(legacyDir)?.notes?.length ?? 0) === 1 &&
           !existsSync(path.join(legacyDir, 'edge-notes-note.txt')),
         `${legacyNote.content.length} 字`
       )

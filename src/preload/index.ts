@@ -7,8 +7,10 @@ import type {
   EdgeNotesState,
   LoginItemState,
   MigrationResult,
+  NotesIndexState,
   NoteSnapshot,
   NoteStatus,
+  NoteSwitchResult,
   TrashResult
 } from '../shared/api'
 
@@ -27,6 +29,30 @@ const api: EdgeNotesApi = {
   setTheme: (theme) => ipcRenderer.invoke(IPC_CHANNELS.setTheme, theme) as Promise<EdgeNotesState>,
   setFontSize: (scale) => ipcRenderer.invoke(IPC_CHANNELS.setFontSize, scale) as Promise<EdgeNotesState>,
   setViewMode: (mode) => ipcRenderer.invoke(IPC_CHANNELS.setViewMode, mode) as Promise<EdgeNotesState>,
+  setNavCollapsed: (value: boolean) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setNavCollapsed, value) as Promise<EdgeNotesState>,
+
+  listNotes: () => ipcRenderer.invoke(IPC_CHANNELS.notesList) as Promise<NotesIndexState>,
+  createNote: (title?: string) => ipcRenderer.invoke(IPC_CHANNELS.notesCreate, title) as Promise<NoteSwitchResult>,
+  switchNote: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.notesSwitch, id) as Promise<NoteSwitchResult>,
+  renameNote: (id: string, title: string) =>
+    ipcRenderer.invoke(IPC_CHANNELS.notesRename, id, title) as Promise<NotesIndexState>,
+  deleteNote: (id: string) => ipcRenderer.invoke(IPC_CHANNELS.notesDelete, id) as Promise<NoteSwitchResult>,
+  reorderNotes: (ids: string[]) => ipcRenderer.invoke(IPC_CHANNELS.notesReorder, ids) as Promise<NotesIndexState>,
+  setNoteViewState: (id: string, patch) => {
+    ipcRenderer.send(IPC_CHANNELS.notesViewState, id, patch)
+  },
+  getReferencedAttachments: () =>
+    ipcRenderer.invoke(IPC_CHANNELS.referencedAttachments) as Promise<string[]>,
+  onNotesIndexChanged: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, index: NotesIndexState): void => {
+      listener(index)
+    }
+    ipcRenderer.on(IPC_CHANNELS.notesIndexChanged, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.notesIndexChanged, handler)
+    }
+  },
   getLoginItemState: () => ipcRenderer.invoke(IPC_CHANNELS.getLoginItem) as Promise<LoginItemState>,
   setLaunchAtLogin: (enabled: boolean) =>
     ipcRenderer.invoke(IPC_CHANNELS.setLaunchAtLogin, enabled) as Promise<EdgeNotesState>,

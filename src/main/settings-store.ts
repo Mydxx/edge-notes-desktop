@@ -18,7 +18,8 @@ export const DEFAULT_SETTINGS: EdgeNotesSettings = {
   launchAtLogin: false,
   theme: 'light',
   fontSize: 'normal',
-  viewMode: 'edit'
+  viewMode: 'edit',
+  navCollapsed: false
 }
 
 /**
@@ -118,6 +119,7 @@ export function sanitizeSettings(input: Record<string, unknown>): EdgeNotesSetti
     theme,
     fontSize,
     viewMode: input.viewMode === 'preview' ? 'preview' : 'edit',
+    navCollapsed: input.navCollapsed === true,
     alwaysOnTop: input.alwaysOnTop !== false,
     pinnedOpen: input.pinnedOpen === true,
     launchAtLogin: input.launchAtLogin === true

@@ -14,6 +14,9 @@ import {
   ensureBuild,
   expandByHover,
   launchApp,
+  readActiveNote,
+  readNoteById,
+  readNotesIndex,
   ps,
   quitApp,
   resetArtifacts,
@@ -27,12 +30,18 @@ import {
 const shotsDir = path.join(artifactsDir, 'notes-shots')
 const userDataDir = path.join(artifactsDir, 'notes-user-data')
 const logFile = path.join(artifactsDir, 'notes.jsonl')
-const noteFile = path.join(userDataDir, 'edge-notes-note.md')
+// 多笔记：正文在 notes/<activeId>.md，按索引找当前活动笔记
 const cdpPort = 9334
 
 const { record, finish } = createReporter()
 
-const readNoteFile = () => (existsSync(noteFile) ? readFileSync(noteFile, 'utf8') : null)
+const readNoteFile = () => readActiveNote(userDataDir)
+
+/** 当前活动笔记在磁盘上的真实路径（多笔记：notes/<activeId>.md） */
+const activeNotePath = () => {
+  const index = readNotesIndex(userDataDir)
+  return index?.activeId ? path.join(userDataDir, 'notes', `${index.activeId}.md`) : ''
+}
 const statusText = (page) => page.evaluate(`document.querySelector('#save-status')?.textContent ?? ''`)
 const editorValue = (page) => page.evaluate(`document.getElementById('note-editor').value`)
 
@@ -335,6 +344,28 @@ async function main() {
   await page.evaluate(`document.getElementById('toggle-preview').click()`)
   await delay(200)
 
+  // 跨笔记引用保护：另一篇笔记引用的图片不能被清理掉
+  const crossPath = path.join(userDataDir, 'attachments', 'cross-note.png')
+  writeFileSync(crossPath, Buffer.from('89504e470d0a1a0a', 'hex'))
+  const crossId = (await page.evaluate('window.edgeNotes.listNotes()')).activeId
+  const crossNote = await page.evaluate(`window.edgeNotes.createNote('跨笔记引用')`)
+  await delay(300)
+  await page.insertText('![](attachments/cross-note.png)')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 6000, '跨笔记引用已保存')
+  await page.evaluate(`window.edgeNotes.switchNote('${crossId}')`)
+  await waitFor(
+    page,
+    `document.querySelector('.noteRow--active')?.getAttribute('data-note-id') === '${crossId}'`,
+    4000,
+    '切回原笔记'
+  )
+  await delay(300)
+  record(
+    '另一篇笔记存在时，清理会跨笔记判断引用',
+    Boolean(crossNote.index.notes.length === 2),
+    `${crossNote.index.notes.map((note) => note.title).join(' / ')}`
+  )
+
   // 清理未被引用的附件：先展示数量与体积，取消不删，确认后移入回收站
   const orphanPath = path.join(userDataDir, 'attachments', 'orphan-test.png')
   writeFileSync(orphanPath, Buffer.from('89504e470d0a1a0a', 'hex'))
@@ -363,6 +394,14 @@ async function main() {
     !existsSync(orphanPath) && existsSync(attachmentPath),
     `orphan=${existsSync(orphanPath)} referenced=${existsSync(attachmentPath)}`
   )
+  record(
+    '另一篇笔记引用的图片没有被清理',
+    existsSync(crossPath),
+    `cross-note=${existsSync(crossPath)}`
+  )
+  // 收尾：删掉这篇临时笔记，后面的用例仍从原笔记继续
+  await page.evaluate(`window.edgeNotes.deleteNote('${crossNote.index.activeId}')`)
+  await delay(400)
   await page.evaluate(`document.getElementById('open-settings').click()`)
   await delay(200)
 
@@ -402,6 +441,167 @@ async function main() {
   await page.evaluate(`window.edgeNotes.setViewMode('edit')`)
   await delay(200)
 
+  // ------------------------------------ 多笔记：新建 / 切换 / 改名 / 删除
+  const beforeMulti = await page.evaluate('window.edgeNotes.listNotes()')
+  const firstNoteId = beforeMulti.activeId
+  const firstNoteContent = await editorValue(page)
+  record(
+    '单篇笔记已升级为索引结构',
+    beforeMulti.notes.length >= 1 && Boolean(firstNoteId),
+    `${beforeMulti.notes.length} 篇`
+  )
+
+  const key = (k, code, vk, modifiers = 2) => ({
+    key: k,
+    code,
+    windowsVirtualKeyCode: vk,
+    nativeVirtualKeyCode: vk,
+    modifiers
+  })
+  const pressKey = async (k, code, vk, modifiers = 2) => {
+    await page.send('Input.dispatchKeyEvent', { type: 'keyDown', ...key(k, code, vk, modifiers) })
+    await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...key(k, code, vk, modifiers) })
+  }
+
+  // Ctrl+N 新建
+  await pressKey('n', 'KeyN', 78)
+  await waitFor(page, `document.querySelectorAll('.noteRow').length === ${beforeMulti.notes.length + 1}`, 4000, '新建笔记')
+  const afterCreate = await page.evaluate('window.edgeNotes.listNotes()')
+  const secondNoteId = afterCreate.activeId
+  record('Ctrl+N 新建并切到新笔记', secondNoteId !== firstNoteId, `${afterCreate.notes.length} 篇`)
+  const focusAfterCreate = await page.evaluate(`document.activeElement?.id ?? 'none'`)
+  record('新建后焦点落在正文（不会把内容打进标题）', focusAfterCreate === 'note-editor', focusAfterCreate)
+
+  await page.insertText('第二篇的内容')
+  await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 6000, '新笔记保存')
+  record('新笔记写入自己的文件', (readNoteById(userDataDir, secondNoteId) ?? '').includes('第二篇的内容'))
+  record('原笔记文件未被覆盖', (readNoteById(userDataDir, firstNoteId) ?? '') === firstNoteContent)
+
+  // 切回第一篇
+  await page.evaluate(`document.getElementById('note-row-${firstNoteId}').click()`)
+  await waitFor(
+    page,
+    `document.querySelector('.noteRow--active')?.getAttribute('data-note-id') === '${firstNoteId}'`,
+    4000,
+    '切回第一篇'
+  )
+  await delay(250)
+  record('切回后正文恢复为第一篇内容', (await editorValue(page)) === firstNoteContent, `${(await editorValue(page)).length} 字`)
+
+  // 双击改名
+  await page.evaluate(`document.getElementById('note-row-${firstNoteId}').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }))`)
+  await waitFor(page, `document.getElementById('rename-input') !== null`, 3000, '进入改名')
+  await page.evaluate(`document.getElementById('rename-input').focus()`)
+  await pressKey('a', 'KeyA', 65)
+  await page.insertText('工作笔记')
+  await pressKey('Enter', 'Enter', 13, 0)
+  await waitFor(page, `document.getElementById('rename-input') === null`, 3000, '改名提交')
+  await delay(300)
+  const renamed = await page.evaluate('window.edgeNotes.listNotes()')
+  record(
+    '双击可改名并落盘',
+    renamed.notes.find((note) => note.id === firstNoteId)?.title === '工作笔记',
+    JSON.stringify(renamed.notes.map((note) => note.title))
+  )
+  record(
+    '改名不影响正文与文件 id',
+    (readNoteById(userDataDir, firstNoteId) ?? '') === firstNoteContent && renamed.activeId === firstNoteId
+  )
+
+  // 拖动调整顺序（在行上按下 → 向下移过一行 → 松手）
+  const orderBefore = (await page.evaluate('window.edgeNotes.listNotes()')).notes.map((note) => note.id)
+  await page.evaluate(`(() => {
+    const row = document.getElementById('note-row-${orderBefore[0]}')
+    const box = row.getBoundingClientRect()
+    const at = (dy) => ({ bubbles: true, button: 0, clientX: box.left + 20, clientY: box.top + 10 + dy })
+    row.dispatchEvent(new PointerEvent('pointerdown', at(0)))
+    row.dispatchEvent(new PointerEvent('pointermove', at(40)))
+    row.dispatchEvent(new PointerEvent('pointerup', at(40)))
+  })()`)
+  await delay(600)
+  const orderAfter = (await page.evaluate('window.edgeNotes.listNotes()')).notes.map((note) => note.id)
+  record(
+    '拖动可以调整笔记顺序并落盘',
+    orderAfter[0] === orderBefore[1] && orderAfter[1] === orderBefore[0],
+    `${orderBefore.join(',')} → ${orderAfter.join(',')}`
+  )
+  const persistedOrder = (readNotesIndex(userDataDir)?.notes ?? []).map((note) => note.id)
+  record('新顺序写入了索引文件', persistedOrder[0] === orderBefore[1], persistedOrder.join(','))
+  // 拖回原顺序，后面的断言仍按原顺序理解
+  await page.evaluate(`(() => {
+    const row = document.getElementById('note-row-${orderBefore[0]}')
+    const box = row.getBoundingClientRect()
+    const at = (dy) => ({ bubbles: true, button: 0, clientX: box.left + 20, clientY: box.top + 10 + dy })
+    row.dispatchEvent(new PointerEvent('pointerdown', at(0)))
+    row.dispatchEvent(new PointerEvent('pointermove', at(-40)))
+    row.dispatchEvent(new PointerEvent('pointerup', at(-40)))
+  })()`)
+  await delay(500)
+
+  // 每篇笔记独立的编辑/预览模式
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await waitFor(page, `document.getElementById('note-preview') !== null`, 3000, '第一篇进入预览')
+  await page.evaluate(`document.getElementById('note-row-${secondNoteId}').click()`)
+  await waitFor(
+    page,
+    `document.querySelector('.noteRow--active')?.getAttribute('data-note-id') === '${secondNoteId}'`,
+    4000,
+    '切到第二篇'
+  )
+  record('第二篇仍停留在编辑模式（模式按笔记记）', (await page.evaluate(`document.getElementById('note-preview') === null`)) === true)
+  await page.evaluate(`document.getElementById('note-row-${firstNoteId}').click()`)
+  await waitFor(
+    page,
+    `document.querySelector('.noteRow--active')?.getAttribute('data-note-id') === '${firstNoteId}'`,
+    4000,
+    '切回第一篇'
+  )
+  await waitFor(page, `document.getElementById('note-preview') !== null`, 3000, '第一篇恢复预览')
+  record('切回后恢复该笔记自己的预览模式', true)
+  await page.evaluate(`document.getElementById('toggle-preview').click()`)
+  await delay(250)
+
+  // 快速连续切换
+  for (let i = 0; i < 6; i += 1) {
+    await page.evaluate(`document.getElementById('note-row-${i % 2 === 0 ? secondNoteId : firstNoteId}').click()`)
+    await delay(60)
+  }
+  await page.evaluate(`document.getElementById('note-row-${secondNoteId}').click()`)
+  await waitFor(
+    page,
+    `document.querySelector('.noteRow--active')?.getAttribute('data-note-id') === '${secondNoteId}'`,
+    4000,
+    '快速切换后停在第二篇'
+  )
+  await delay(500)
+  record('快速连续切换不会串内容', (await editorValue(page)).includes('第二篇的内容'), `${(await editorValue(page)).length} 字`)
+
+  // 删除当前正在编辑的笔记：先取消，再确认
+  await page.evaluate(`document.querySelector('#note-row-${secondNoteId} .noteRow__del').click()`)
+  await waitFor(page, `document.getElementById('note-delete-confirm') !== null`, 3000, '删除确认条')
+  const deleteText = await page.evaluate(`document.querySelector('.confirm__text')?.textContent ?? ''`)
+  record('删除笔记前必须确认', deleteText.includes('删除'), deleteText.trim().slice(0, 32))
+  await page.evaluate(`document.getElementById('note-delete-cancel').click()`)
+  await delay(300)
+  record(
+    '取消删除后笔记仍在',
+    (await page.evaluate('window.edgeNotes.listNotes()')).notes.length === 2
+  )
+
+  await page.evaluate(`document.querySelector('#note-row-${secondNoteId} .noteRow__del').click()`)
+  await waitFor(page, `document.getElementById('note-delete-confirm') !== null`, 3000, '再次确认删除')
+  await page.evaluate(`document.getElementById('note-delete-confirm').click()`)
+  await waitFor(page, `document.querySelectorAll('.noteRow').length === 1`, 6000, '删除后只剩一篇')
+  await delay(600)
+  const afterDelete = await page.evaluate('window.edgeNotes.listNotes()')
+  record(
+    '删除正在编辑的笔记后自动切到剩下的笔记',
+    afterDelete.notes.length === 1 && afterDelete.activeId === firstNoteId,
+    JSON.stringify(afterDelete.notes.map((note) => note.title))
+  )
+  record('被删除的笔记文件已移出目录', !existsSync(path.join(userDataDir, 'notes', `${secondNoteId}.md`)))
+  record('增删改之后原笔记内容未受影响', (await editorValue(page)) === firstNoteContent)
+
   // ------------------------------------------------------------ 清空 + 取消
   await openPanel(page, metrics)
   const contentBeforeClear = await editorValue(page)
@@ -431,8 +631,10 @@ async function main() {
   await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 6000, '故障前的保存')
   const beforeFailure = await editorValue(page)
 
-  rmSync(noteFile, { force: true })
-  mkdirSync(noteFile, { recursive: true })
+  // 把当前笔记文件换成同名目录，制造真实的 EPERM
+  const failingNotePath = activeNotePath()
+  rmSync(failingNotePath, { force: true })
+  mkdirSync(failingNotePath, { recursive: true })
   await page.insertText('——这段文字在保存失败时必须保留在编辑区——')
   await waitFor(page, `document.querySelector('.errorBar') !== null`, 8000, '保存失败提示')
   const failureUi = await page.evaluate(`({
@@ -447,7 +649,7 @@ async function main() {
   await page.captureScreenshot(path.join(shotsDir, '02-save-failed.png'))
 
   // 恢复可写后重试
-  rmSync(noteFile, { recursive: true, force: true })
+  rmSync(failingNotePath, { recursive: true, force: true })
   await page.evaluate(`document.querySelector('.errorBar .textBtn').click()`)
   await waitFor(page, `document.querySelector('.errorBar') === null`, 6000, '重试后错误提示消失')
   await waitFor(page, `document.querySelector('#save-status')?.textContent === '已保存'`, 4000, '重试后已保存')
@@ -458,6 +660,15 @@ async function main() {
   await focusEditorAtEnd(page)
   await page.insertText('退出前最后一句，不等待防抖立即关闭应用。')
   const expectedAfterQuit = await editorValue(page)
+
+  // 退出前留下可验证的工作状态：光标 7 + 预览模式。
+  // 直接写状态、不等待节流，避免 600ms 防抖先落盘、让"退出补写"无从发生。
+  const stateBeforeQuit = await page.evaluate('window.edgeNotes.listNotes()')
+  await page.evaluate(`document.getElementById('note-editor').setSelectionRange(7, 7)`)
+  await page.evaluate(
+    `window.edgeNotes.setNoteViewState('${stateBeforeQuit.activeId}', { caret: 7, viewMode: 'preview' })`
+  )
+  await page.evaluate(`window.edgeNotes.setViewMode('preview')`)
   const quitFrom = readLog(logFile).length
   quitApp(page)
   const exited = await waitChildExit(app, 8000)
@@ -474,6 +685,24 @@ async function main() {
   const page2 = await connectPage(cdpPort)
   const reopened = await page2.evaluate('window.edgeNotes.getNote()')
   record('重启后笔记内容完整恢复', reopened.content === expectedAfterQuit, `${reopened.content.length} 字`)
+
+  const indexAfterRestart = await page2.evaluate('window.edgeNotes.listNotes()')
+  const restoredNote = indexAfterRestart.notes.find((note) => note.id === indexAfterRestart.activeId)
+  record(
+    '重启后回到上次打开的笔记',
+    indexAfterRestart.activeId === stateBeforeQuit.activeId,
+    `${indexAfterRestart.notes.length} 篇 / active=${indexAfterRestart.activeId}`
+  )
+  record('重启后恢复该笔记的预览模式', restoredNote?.viewMode === 'preview', String(restoredNote?.viewMode))
+  await delay(400)
+  const restoredCaret = await page2.evaluate(`document.getElementById('note-editor').selectionStart`)
+  record('重启后恢复光标位置', restoredCaret === 7, `caret=${restoredCaret}`)
+  record(
+    '重启后恢复每篇笔记各自的滚动位置字段',
+    typeof restoredNote?.scrollTop === 'number' && restoredNote.scrollTop >= 0,
+    `scrollTop=${restoredNote?.scrollTop}`
+  )
+  await page2.evaluate(`window.edgeNotes.setViewMode('edit')`)
   await openPanel(page2, metrics)
   record('重启后编辑区显示上次内容', (await editorValue(page2)) === expectedAfterQuit)
   record('重启后显示已保存状态', (await statusText(page2)) === '已保存')
@@ -488,8 +717,39 @@ async function main() {
   await waitChildExit(app, 8000)
   page2.close()
 
-  record('笔记文件路径位于 userData 下', noteFile.includes('notes-user-data'), noteFile)
+  record('笔记文件路径位于 userData/notes 下', activeNotePath().includes('notes-user-data'), activeNotePath())
   record('窗口仍贴合工作区右边缘（本轮未破坏窗口行为）', Math.abs(areaRight - expandedBounds.x - expandedBounds.width) <= 2, JSON.stringify(expandedBounds))
+
+  // ------------------------------- 删除最后一篇笔记：不能把应用弄成"无笔记"状态
+  const soloDir = path.join(artifactsDir, 'notes-solo-user-data')
+  rmSync(soloDir, { recursive: true, force: true })
+  const soloFrom = readLog(logFile).length
+  const soloApp = launchApp({ userDataDir: soloDir, logFile, cdpPort })
+  try {
+    await waitForEvent(logFile, 'dock-started', { timeoutMs: 40000, fromIndex: soloFrom })
+    const soloPage = await connectPage(cdpPort)
+    await waitFor(soloPage, `document.querySelectorAll('.noteRow').length === 1`, 5000, '初始一篇笔记')
+    const soloIndex = await soloPage.evaluate('window.edgeNotes.listNotes()')
+    const onlyId = soloIndex.activeId
+    await soloPage.evaluate(`document.querySelector('#note-row-${onlyId} .noteRow__del').click()`)
+    await waitFor(soloPage, `document.getElementById('note-delete-confirm') !== null`, 3000, '删除确认')
+    await soloPage.evaluate(`document.getElementById('note-delete-confirm').click()`)
+    await waitFor(soloPage, `document.querySelectorAll('.noteRow').length === 1`, 6000, '删除后仍有笔记')
+    await delay(500)
+    const seeded = await soloPage.evaluate('window.edgeNotes.listNotes()')
+    const seededNote = await soloPage.evaluate('window.edgeNotes.getNote()')
+    record(
+      '删除最后一篇会自动补一篇空白笔记',
+      seeded.notes.length === 1 && seeded.activeId !== onlyId && seededNote.content === '',
+      `${seeded.notes.length} 篇 / 新 id=${seeded.activeId}`
+    )
+    quitApp(soloPage)
+    await waitChildExit(soloApp, 8000)
+    soloPage.close()
+  } catch (error) {
+    soloApp.kill()
+    throw error
+  }
 
   finish()
 }

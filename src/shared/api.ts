@@ -33,8 +33,10 @@ export interface EdgeNotesSettings {
   theme: ThemeMode
   /** 正文字号档位 */
   fontSize: FontScale
-  /** 上次使用的视图模式，重启后沿用 */
+  /** 上次使用的视图模式，重启后沿用（也作为新笔记的默认值） */
   viewMode: ViewMode
+  /** 左侧笔记导航是否收起 */
+  navCollapsed: boolean
 }
 
 /** 数据目录信息（目录本身不在 settings.json 里，避免自指） */
@@ -93,6 +95,30 @@ export interface NoteSnapshot {
   status: NoteStatus
 }
 
+/** 一篇笔记的元信息（正文另存为 notes/<id>.md） */
+export interface NoteMeta {
+  id: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  /** 这篇笔记上次用的是编辑还是预览 */
+  viewMode: ViewMode
+  /** 上次的滚动位置 */
+  scrollTop: number
+  /** 上次的光标位置 */
+  caret: number
+}
+
+export interface NotesIndexState {
+  notes: NoteMeta[]
+  activeId: string
+}
+
+export interface NoteSwitchResult {
+  index: NotesIndexState
+  note: NoteSnapshot
+}
+
 /** 附件目录里的一个文件 */
 export interface AttachmentFile {
   /** Markdown 里使用的相对路径 */
@@ -136,7 +162,17 @@ export const IPC_CHANNELS = {
   noteSaveNow: 'edge-notes:note-save-now',
   noteRetry: 'edge-notes:note-retry',
   noteStatus: 'edge-notes:note-status',
-  editorFocus: 'edge-notes:editor-focus'
+  editorFocus: 'edge-notes:editor-focus',
+  notesList: 'edge-notes:notes-list',
+  notesCreate: 'edge-notes:notes-create',
+  notesSwitch: 'edge-notes:notes-switch',
+  notesRename: 'edge-notes:notes-rename',
+  notesDelete: 'edge-notes:notes-delete',
+  notesReorder: 'edge-notes:notes-reorder',
+  notesViewState: 'edge-notes:notes-view-state',
+  notesIndexChanged: 'edge-notes:notes-index-changed',
+  setNavCollapsed: 'edge-notes:set-nav-collapsed',
+  referencedAttachments: 'edge-notes:referenced-attachments'
 } as const
 
 export interface EdgeNotesApi {
@@ -180,6 +216,21 @@ export interface EdgeNotesApi {
   trashAttachments(relatives: string[]): Promise<TrashResult>
   /** 编辑器聚焦时抑制自动收起 */
   setEditorFocused(focused: boolean): void
+
+  /** 全部笔记的索引（顺序 + 标题 + 每篇的视图状态） */
+  listNotes(): Promise<NotesIndexState>
+  createNote(title?: string): Promise<NoteSwitchResult>
+  switchNote(id: string): Promise<NoteSwitchResult>
+  renameNote(id: string, title: string): Promise<NotesIndexState>
+  /** 删除笔记（文件进回收站）；删除最后一篇时会自动补一篇空白笔记 */
+  deleteNote(id: string): Promise<NoteSwitchResult>
+  reorderNotes(ids: string[]): Promise<NotesIndexState>
+  /** 记录某篇笔记的滚动/光标/视图模式（主进程防抖落盘） */
+  setNoteViewState(id: string, patch: { viewMode?: ViewMode; scrollTop?: number; caret?: number }): void
+  setNavCollapsed(value: boolean): Promise<EdgeNotesState>
+  /** 所有笔记里引用到的附件路径（清理附件时用于跨笔记判断） */
+  getReferencedAttachments(): Promise<string[]>
+  onNotesIndexChanged(listener: (index: NotesIndexState) => void): () => void
 
   onStateChanged(listener: (state: EdgeNotesState) => void): () => void
   onNoteStatus(listener: (status: NoteStatus) => void): () => void

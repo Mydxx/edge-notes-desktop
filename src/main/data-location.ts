@@ -5,12 +5,36 @@ import path from 'node:path'
 import { log } from './log'
 
 const SETTINGS_FILE = 'edge-notes-settings.json'
-const NOTE_FILE = 'edge-notes-note.md'
-/** 纯文本时代的历史文件名，迁移时一起带走，避免升级用户的笔记留在旧目录 */
-const LEGACY_NOTE_FILE = 'edge-notes-note.txt'
+/** 多笔记：索引 + 每篇一个 md */
+const NOTES_INDEX_FILE = 'notes-index.json'
+const NOTES_DIR = 'notes'
+/** 单篇笔记时代的历史文件名，迁移时一起带走，避免升级用户的笔记留在旧目录 */
+const LEGACY_NOTE_FILE = 'edge-notes-note.md'
+const LEGACY_TEXT_FILE = 'edge-notes-note.txt'
 /** 图片附件目录：笔记里写的是 attachments/xxx.png 相对路径，搬家时必须整目录带走 */
 const ATTACHMENT_DIR = 'attachments'
 const POINTER_FILE = 'data-location.json'
+
+/** 复制一个"目录下所有文件"（只一层，与附件/笔记目录结构一致） */
+function copyFlatDirectory(source: string, target: string, written: string[]): number {
+  if (!existsSync(source)) {
+    return 0
+  }
+  mkdirSync(target, { recursive: true })
+  const entries = readdirSync(source, { withFileTypes: true }).filter((entry) => entry.isFile())
+  let copied = 0
+  for (const entry of entries) {
+    const src = path.join(source, entry.name)
+    const dest = path.join(target, entry.name)
+    copyVerified(src, dest)
+    written.push(dest)
+    copied += 1
+  }
+  if (copied !== entries.length) {
+    throw new Error(`文件数量校验失败：应有 ${entries.length} 个，实际复制 ${copied} 个`)
+  }
+  return copied
+}
 
 const FS_REASON: Record<string, string> = {
   ENOSPC: '磁盘空间不足',
@@ -50,25 +74,12 @@ function copyVerified(src: string, dest: string): void {
  * `written` 用于失败回滚，避免在目标目录留下半套数据。
  */
 function copyAttachments(from: string, to: string, written: string[]): number {
-  const source = path.join(from, ATTACHMENT_DIR)
-  if (!existsSync(source)) {
-    return 0
-  }
-  const target = path.join(to, ATTACHMENT_DIR)
-  mkdirSync(target, { recursive: true })
-  const entries = readdirSync(source, { withFileTypes: true }).filter((entry) => entry.isFile())
-  let copied = 0
-  for (const entry of entries) {
-    const src = path.join(source, entry.name)
-    const dest = path.join(target, entry.name)
-    copyVerified(src, dest)
-    written.push(dest)
-    copied += 1
-  }
-  if (copied !== entries.length) {
-    throw new Error(`附件数量校验失败：应有 ${entries.length} 个，实际复制 ${copied} 个`)
-  }
-  return copied
+  return copyFlatDirectory(path.join(from, ATTACHMENT_DIR), path.join(to, ATTACHMENT_DIR), written)
+}
+
+/** 多笔记的正文文件：notes/<id>.md 必须整目录带走，否则换盘后笔记全丢 */
+function copyNotes(from: string, to: string, written: string[]): number {
+  return copyFlatDirectory(path.join(from, NOTES_DIR), path.join(to, NOTES_DIR), written)
 }
 
 /**
@@ -149,7 +160,7 @@ export function resolveUserDataDir(): void {
     const previous = app.getPath('userData')
     const written: string[] = []
     let migrated = 0
-    for (const name of [SETTINGS_FILE, NOTE_FILE, LEGACY_NOTE_FILE]) {
+    for (const name of [SETTINGS_FILE, NOTES_INDEX_FILE, LEGACY_NOTE_FILE, LEGACY_TEXT_FILE]) {
       const src = path.join(previous, name)
       const dest = path.join(dir, name)
       if (existsSync(src) && !existsSync(dest)) {
@@ -158,7 +169,8 @@ export function resolveUserDataDir(): void {
         migrated += 1
       }
     }
-    // 图片必须跟着笔记一起搬，否则正文里的 attachments/… 会全部失效
+    // 正文与图片必须跟着走，否则换盘后笔记空、图片全部失效
+    migrated += copyNotes(previous, dir, written)
     migrated += copyAttachments(previous, dir, written)
     mkdirSync(path.dirname(pointerPath()), { recursive: true })
     writeFileSync(pointerPath(), `${JSON.stringify({ dataDir: dir }, null, 2)}\n`, 'utf8')
@@ -215,8 +227,10 @@ export function migrateDataDir(target: string): MigrationResult {
     mkdirSync(to, { recursive: true })
   }
   if (
-    existsSync(path.join(to, NOTE_FILE)) ||
+    existsSync(path.join(to, NOTES_INDEX_FILE)) ||
+    existsSync(path.join(to, NOTES_DIR)) ||
     existsSync(path.join(to, LEGACY_NOTE_FILE)) ||
+    existsSync(path.join(to, LEGACY_TEXT_FILE)) ||
     existsSync(path.join(to, SETTINGS_FILE))
   ) {
     throw new Error('目标目录里已经有 Edge Notes 的数据，请另选一个空目录')
@@ -227,7 +241,7 @@ export function migrateDataDir(target: string): MigrationResult {
   const written: string[] = []
 
   try {
-    for (const name of [SETTINGS_FILE, NOTE_FILE, LEGACY_NOTE_FILE]) {
+    for (const name of [SETTINGS_FILE, NOTES_INDEX_FILE, LEGACY_NOTE_FILE, LEGACY_TEXT_FILE]) {
       const src = path.join(from, name)
       if (!existsSync(src)) {
         continue
@@ -238,12 +252,16 @@ export function migrateDataDir(target: string): MigrationResult {
       copied.push(name)
     }
 
+    const noteCount = copyNotes(from, to, written)
+    if (noteCount > 0) {
+      copied.push(`${NOTES_DIR}/ (${noteCount})`)
+    }
     const attachmentCount = copyAttachments(from, to, written)
 
     // 指针最后写：只有数据确认到位才切换，失败时仍使用原目录
     mkdirSync(path.dirname(pointerPath()), { recursive: true })
     writeFileSync(pointerPath(), `${JSON.stringify({ dataDir: to }, null, 2)}\n`, 'utf8')
-    log('data-dir-migrated', { from, to, copied, attachments: attachmentCount })
+    log('data-dir-migrated', { from, to, copied, notes: noteCount, attachments: attachmentCount })
     return { from, to, copied, requiresRestart: true }
   } catch (error) {
     for (const file of written.reverse()) {
