@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { IPC_CHANNELS } from '../shared/api'
-import type { EdgeNotesApi, EdgeNotesState, NoteSnapshot, NoteStatus } from '../shared/api'
+import type { EdgeNotesApi, EdgeNotesState, LoginItemState, NoteSnapshot, NoteStatus } from '../shared/api'
 
 /** 渲染进程唯一可用的能力面：受限 IPC，不暴露 Node.js 或任意系统 API */
 const api: EdgeNotesApi = {
@@ -13,6 +13,10 @@ const api: EdgeNotesApi = {
   setResizing: (value: boolean) => {
     ipcRenderer.send(IPC_CHANNELS.setResizing, value)
   },
+  setHidden: (hidden: boolean) => ipcRenderer.invoke(IPC_CHANNELS.setHidden, hidden) as Promise<EdgeNotesState>,
+  getLoginItemState: () => ipcRenderer.invoke(IPC_CHANNELS.getLoginItem) as Promise<LoginItemState>,
+  setLaunchAtLogin: (enabled: boolean) =>
+    ipcRenderer.invoke(IPC_CHANNELS.setLaunchAtLogin, enabled) as Promise<EdgeNotesState>,
   quit: () => ipcRenderer.invoke(IPC_CHANNELS.quit) as Promise<void>,
 
   getNote: () => ipcRenderer.invoke(IPC_CHANNELS.noteGet) as Promise<NoteSnapshot>,
@@ -42,6 +46,14 @@ const api: EdgeNotesApi = {
     ipcRenderer.on(IPC_CHANNELS.noteStatus, handler)
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.noteStatus, handler)
+    }
+  },
+
+  onOpenSettings: (listener) => {
+    const handler = (): void => listener()
+    ipcRenderer.on(IPC_CHANNELS.openSettings, handler)
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.openSettings, handler)
     }
   }
 }

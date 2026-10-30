@@ -13,18 +13,30 @@ npm run dev        # 编译主进程 + 起 Vite(5199) + 拉起 Electron
 npm run build      # tsc 编译主进程/preload + vite 构建渲染层
 npm start          # 构建后以产物方式启动（file:// 加载）
 npm run typecheck  # 两套 tsconfig 类型检查
-npm run test:e2e   # 构建 + 窗口 73 项 + 笔记 33 项断言
+npm run test:e2e   # 构建 + 窗口 79 + 笔记 33 + 桌面集成 25 项断言
 npm run test:visual # 多宽度/多状态截图 + 布局溢出度量（14 项断言）
+npm run gen:icon   # 重新生成 assets/tray.png 与 @2x（图标脚本在仓库内）
 ```
+
+## 常驻与退出
+
+- 面板上的 `−`、或 Alt+F4 / 系统关闭窗口：**隐藏到托盘**（窗口整体消失，贴屏幕边缘不会再唤出）。
+- 托盘图标左键单击：隐藏 ⇄ 显示（显示后会滑出面板，之后照常按延迟收起）。
+- 托盘菜单：显示/隐藏、固定展开（勾选）、设置…、退出 Edge Notes。
+- 真正退出只有两条路：托盘菜单「退出 Edge Notes」、设置面板底部「退出 Edge Notes」。
+- 开机启动默认关闭，开关在设置面板里；写入后立刻回读系统状态，系统没接受就直接报错，不会记假状态。
 
 ## 目录结构
 
 ```
-src/main/index.ts          应用入口：窗口创建、IPC 注册与校验、生命周期、单实例
-src/main/edge-dock.ts      窗口核心：几何计算、指针轮询、四态状态机、位移动画、置顶
+src/main/index.ts          应用入口：窗口创建、IPC 注册与校验、生命周期、单实例、托盘接线
+src/main/edge-dock.ts      窗口核心：几何计算、指针轮询、四态状态机、位移动画、置顶、隐藏
+src/main/tray.ts           系统托盘：图标、菜单（显示/隐藏、固定展开、设置、退出）、tooltip
+src/main/login-item.ts     开机启动：HKCU Run 写入 + 系统回读校验 + 启动时对齐
 src/main/notes-store.ts    笔记持久化：内存草稿 + 600ms 防抖 + 原子写 + 退出补写
 src/main/settings-store.ts 设置持久化：逐字段校验夹紧 + 防抖 + 原子写
 src/main/log.ts            结构化 JSONL 日志（EDGE_NOTES_LOG 打开，供自动化验证）
+assets/tray.png|@2x.png    托盘图标（由 scripts/gen-tray-icon.ps1 生成，入库）
 src/preload/index.ts       contextBridge 暴露的受限 API（唯一渲染层能力面）
 src/shared/api.ts          IPC 契约：类型 + 通道名（主进程与 preload 共用）
 src/shared/constants.ts    4px 触发条、350 默认宽度、700ms 延迟、180ms 动画等常量
@@ -33,6 +45,7 @@ scripts/dev.mjs            开发启动器（无 concurrently / wait-on 之类�
 tests/window.e2e.mjs       窗口行为端到端验证（真实鼠标 + CDP + 系统 Z 序 + 设置回退）
 tests/notes.e2e.mjs        笔记功能端到端验证（真实输入 + 真实剪贴板 + 故障注入）
 tests/visual.e2e.mjs       视觉验证：多宽度/空笔记/长文本/设置弹层截图 + 布局度量
+tests/desktop.e2e.mjs      桌面集成：托盘、隐藏/恢复、退出清理、开机启动往返、二次启动唤出
 tests/lib/                 CDP 客户端、日志读取、PowerShell 驱动脚本、清理脚本
 ```
 
@@ -80,6 +93,7 @@ E2E 会**真实移动鼠标、真实点击、真实读写剪贴板**，因此：
 | 03 本地笔记与自动保存 | ✅（笔记 33 项断言） |
 | 04 面板设置与窗口交互（左右切换 / 宽度 280–600 / 收起延迟三档） | ✅ |
 | 05 UI 与视觉精修（设计 Token、头栏收敛、底栏状态、焦点环） | ✅（视觉 14 项断言 + 9 组截图） |
-| 06 打包与日常使用测试 | 未开始 |
+| 06 桌面集成（托盘、隐藏/退出、开机启动） | ✅（桌面集成 25 项断言） |
+| 07 打包与日常使用测试 | 未开始 |
 
 界面样式统一由 `src/renderer/styles.css` 顶部的设计 Token 驱动（颜色/间距/圆角/字号/结构尺寸），组件内不写死数值。

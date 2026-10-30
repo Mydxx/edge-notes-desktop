@@ -51,11 +51,27 @@ async function openSession(wsUrl) {
     }
   })
 
+  // 目标进程退出时 socket 会断开：必须让挂起的调用立刻失败，
+  // 否则 await 会永远悬挂（退出应用、渲染进程崩溃这类场景都会踩到）。
+  const failPending = (reason) => {
+    for (const [id, entry] of pending) {
+      pending.delete(id)
+      entry.reject(new Error(reason))
+    }
+  }
+  socket.addEventListener('close', () => failPending('CDP 连接已关闭（目标进程可能已退出）'))
+  socket.addEventListener('error', () => failPending('CDP 连接错误'))
+
   const send = (method, params = {}) =>
     new Promise((resolve, reject) => {
       const id = ++nextId
       pending.set(id, { resolve, reject })
-      socket.send(JSON.stringify({ id, method, params }))
+      try {
+        socket.send(JSON.stringify({ id, method, params }))
+      } catch (error) {
+        pending.delete(id)
+        reject(error instanceof Error ? error : new Error(String(error)))
+      }
     })
 
   await send('Runtime.enable')

@@ -5,9 +5,11 @@ import { IPC_CHANNELS } from '../shared/api'
 import type { DockPhase, DockSide, EdgeNotesSettings, EdgeNotesState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_DEFAULT, PANEL_WIDTH_DEFAULT, TRIGGER_WIDTH } from '../shared/constants'
 import { EdgeDock } from './edge-dock'
+import { applyLoginItem, readLoginItem, reconcileLoginItem } from './login-item'
 import { log } from './log'
 import { NotesStore } from './notes-store'
 import { SettingsStore } from './settings-store'
+import { createTray, destroyTray, refreshTray } from './tray'
 
 // 明确应用名：userData 目录与单实例锁都基于它，避免与其它 Electron 应用互相覆盖数据/互相踢掉
 app.setName('Edge Notes Desktop')
@@ -18,6 +20,8 @@ let mainWindow: BrowserWindow | null = null
 let dock: EdgeDock | null = null
 let store: SettingsStore | null = null
 let notes: NotesStore | null = null
+/** 是否正在真正退出：用于区分"关窗口"与"退出应用" */
+let quitting = false
 
 function currentPhase(): DockPhase {
   return dock?.getPhase() ?? 'collapsed'
@@ -29,7 +33,8 @@ function buildState(): EdgeNotesState {
     width: PANEL_WIDTH_DEFAULT,
     alwaysOnTop: true,
     pinnedOpen: false,
-    collapseDelay: COLLAPSE_DELAY_DEFAULT
+    collapseDelay: COLLAPSE_DELAY_DEFAULT,
+    launchAtLogin: false
   }
   const phase = currentPhase()
   return {
@@ -37,6 +42,7 @@ function buildState(): EdgeNotesState {
     runtime: {
       phase,
       expanded: phase === 'expanded' || phase === 'expanding',
+      hidden: dock?.isHidden() ?? false,
       triggerWidth: TRIGGER_WIDTH,
       collapseDelayMs: settings.collapseDelay
     }
@@ -44,10 +50,41 @@ function buildState(): EdgeNotesState {
 }
 
 function broadcast(): void {
+  if (!trayHandlers) {
+    return
+  }
+  refreshTray(trayHandlers)
   if (!mainWindow || mainWindow.isDestroyed()) {
     return
   }
   mainWindow.webContents.send(IPC_CHANNELS.stateChanged, buildState())
+}
+
+/** 托盘菜单与窗口共用同一套动作，避免两处逻辑分叉 */
+let trayHandlers: {
+  isHidden(): boolean
+  isPinned(): boolean
+  toggleHidden(): void
+  togglePinned(): void
+  openSettings(): void
+  quit(): void
+} | null = null
+
+function toggleHidden(): void {
+  if (!dock) {
+    return
+  }
+  dock.setHidden(!dock.isHidden())
+  broadcast()
+}
+
+function openSettingsFromTray(): void {
+  if (!dock || !mainWindow) {
+    return
+  }
+  dock.showPanel('tray-settings')
+  mainWindow.webContents.send(IPC_CHANNELS.openSettings)
+  broadcast()
 }
 
 function broadcastNoteStatus(status: NoteStatus): void {
@@ -89,6 +126,18 @@ function createWindow(): BrowserWindow {
     dock?.dispose()
     dock = null
     mainWindow = null
+  })
+
+  // Alt+F4 / 系统关闭 = 隐藏到托盘，不退出。真正退出只走托盘菜单或设置里的「退出应用」，
+  // 否则一个常驻工具很容易被误关，而用户以为"它还在后台记着"。
+  win.on('close', (event) => {
+    if (quitting) {
+      return
+    }
+    event.preventDefault()
+    log('close-intercepted', {})
+    dock?.setHidden(true)
+    broadcast()
   })
 
   // 窗口失去焦点时用户不可能还在拖拽，释放标记防止卡死
@@ -211,6 +260,31 @@ function registerIpc(): void {
     dock?.setResizing(value === true)
   })
 
+  ipcMain.handle(IPC_CHANNELS.setHidden, (event, value: unknown) => {
+    requireSender(event)
+    if (typeof value !== 'boolean') {
+      throw new TypeError('hidden must be a boolean')
+    }
+    dock?.setHidden(value)
+    broadcast()
+    return buildState()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.getLoginItem, (event) => {
+    requireSender(event)
+    return readLoginItem()
+  })
+
+  ipcMain.handle(IPC_CHANNELS.setLaunchAtLogin, (event, value: unknown) => {
+    requireSender(event)
+    if (typeof value !== 'boolean') {
+      throw new TypeError('launchAtLogin must be a boolean')
+    }
+    // 先写系统再落设置：系统没接受就抛错，设置文件不会出现"以为成功"的假状态
+    applyLoginItem(value)
+    return applySettings({ launchAtLogin: value })
+  })
+
   ipcMain.handle(IPC_CHANNELS.quit, (event) => {
     requireSender(event)
     app.quit()
@@ -293,6 +367,27 @@ async function bootstrap(): Promise<void> {
   mainWindow.once('ready-to-show', () => {
     dock?.start()
   })
+
+  // 开机启动以系统实际状态为准：用户可能在 Windows"启动应用"里关掉过
+  if (store) {
+    const actual = reconcileLoginItem(store.get().launchAtLogin)
+    if (actual !== store.get().launchAtLogin) {
+      applySettings({ launchAtLogin: actual })
+    }
+  }
+
+  trayHandlers = {
+    isHidden: () => dock?.isHidden() ?? false,
+    isPinned: () => store?.get().pinnedOpen ?? false,
+    toggleHidden,
+    togglePinned: () => applySettings({ pinnedOpen: !(store?.get().pinnedOpen ?? false) }),
+    openSettings: openSettingsFromTray,
+    quit: () => {
+      log('quit-from-tray', {})
+      app.quit()
+    }
+  }
+  createTray(trayHandlers)
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
@@ -302,18 +397,28 @@ if (!gotSingleInstanceLock) {
   app.quit()
 } else {
   app.on('second-instance', () => {
-    mainWindow?.show()
+    log('second-instance', { hidden: dock?.isHidden() ?? false })
+    // 再次启动应该把面板叫回来（包括从托盘隐藏状态）
+    dock?.showPanel('second-instance')
+    broadcast()
   })
 
   app.on('before-quit', () => {
+    quitting = true
     notes?.flushSync()
     store?.flush()
     dock?.dispose()
     log('before-quit', {})
   })
 
+  app.on('will-quit', () => {
+    destroyTray()
+    log('will-quit', {})
+  })
+
+  // 有托盘常驻，关掉窗口不代表退出应用
   app.on('window-all-closed', () => {
-    app.quit()
+    log('window-all-closed', {})
   })
 
   app.whenReady().then(bootstrap).catch((error: unknown) => {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PointerEvent as ReactPointerEvent } from 'react'
-import type { CollapseDelay, EdgeNotesState, NoteStatus } from '../shared/api'
+import type { CollapseDelay, EdgeNotesState, LoginItemState, NoteStatus } from '../shared/api'
 import { COLLAPSE_DELAY_OPTIONS } from '../shared/constants'
 
 const EMPTY_STATUS: NoteStatus = { state: 'idle', savedAt: null, message: null }
@@ -40,10 +40,10 @@ function IconSettings() {
   )
 }
 
-function IconClose() {
+function IconMinimize() {
   return (
-    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden="true">
-      <path d="M4.4 4.4l7.2 7.2M11.6 4.4l-7.2 7.2" />
+    <svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+      <path d="M4.2 8h7.6" />
     </svg>
   )
 }
@@ -55,6 +55,7 @@ export default function App() {
   const [busy, setBusy] = useState(false)
   const [confirmingClear, setConfirmingClear] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [loginItem, setLoginItem] = useState<LoginItemState | null>(null)
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
   const loadedRef = useRef(false)
   /** 拖动调宽时的锚点（面板贴边那一侧的屏幕坐标） */
@@ -143,6 +144,25 @@ export default function App() {
       window.removeEventListener('pointerdown', onPointerDown, true)
     }
   }, [settingsOpen])
+
+  // 托盘「设置…」会请求打开设置面板
+  useEffect(() => window.edgeNotes.onOpenSettings(() => setSettingsOpen(true)), [])
+
+  // 开机启动以系统回读为准，每次设置变化后刷新
+  useEffect(() => {
+    let alive = true
+    window.edgeNotes
+      .getLoginItemState()
+      .then((next) => {
+        if (alive) {
+          setLoginItem(next)
+        }
+      })
+      .catch(() => undefined)
+    return () => {
+      alive = false
+    }
+  }, [state?.settings.launchAtLogin])
 
   // 面板真正收起后关掉设置浮层，否则下次展开时它会又挂在那里
   const wasExpandedRef = useRef(false)
@@ -358,7 +378,30 @@ export default function App() {
             </span>
           </div>
 
+          <div className="settings__row">
+            <span className="settings__label">开机启动</span>
+            <button
+              id="toggle-launch-at-login"
+              type="button"
+              className="switchBtn"
+              aria-pressed={settings.launchAtLogin}
+              title={loginItem?.message ?? '登录 Windows 后自动启动'}
+              disabled={loginItem?.supported === false}
+              onClick={() => {
+                void applySettings(() => window.edgeNotes.setLaunchAtLogin(!settings.launchAtLogin))
+              }}
+            >
+              {settings.launchAtLogin ? '已开启' : '已关闭'}
+            </button>
+          </div>
+
           <p className="settings__hint">拖动面板内侧边缘可调整宽度；Esc 关闭本面板。</p>
+
+          <div className="settings__footer">
+            <button id="quit-app" type="button" className="textBtn textBtn--quiet" title="退出应用（会先保存笔记）" onClick={() => void window.edgeNotes.quit()}>
+              退出 Edge Notes
+            </button>
+          </div>
         </div>
       ) : null}
 
@@ -407,16 +450,16 @@ export default function App() {
           清空
         </button>
         <button
-          id="panel-close"
+          id="hide-panel"
           type="button"
           className="iconBtn iconBtn--sm"
-          aria-label="退出 Edge Notes"
-          title="退出 Edge Notes"
+          aria-label="隐藏到托盘"
+          title="隐藏到托盘（托盘菜单或设置里可退出）"
           onClick={() => {
-            void window.edgeNotes.quit()
+            void window.edgeNotes.setHidden(true)
           }}
         >
-          <IconClose />
+          <IconMinimize />
         </button>
       </footer>
     </div>

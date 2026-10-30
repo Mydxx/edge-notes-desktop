@@ -1,6 +1,6 @@
 {
   "name": "edge-notes-desktop",
-  "version": "0.4.1",
+  "version": "0.5.0",
   "private": true,
   "description": "Edge Notes Desktop - 桌面边缘笔记栏（原生窗口贴边滑出 + 本地笔记）",
   "main": "dist-electron/main/index.js",
@@ -14,7 +14,9 @@
     "test:window": "node tests/window.e2e.mjs",
     "test:notes": "node tests/notes.e2e.mjs",
     "test:visual": "node tests/visual.e2e.mjs",
-    "test:e2e": "npm run build && node tests/window.e2e.mjs && node tests/notes.e2e.mjs"
+    "test:desktop": "node tests/desktop.e2e.mjs",
+    "gen:icon": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/gen-tray-icon.ps1",
+    "test:e2e": "npm run build && node tests/window.e2e.mjs && node tests/notes.e2e.mjs && node tests/desktop.e2e.mjs"
   },
   "dependencies": {
     "react": "^19.3.1",

@@ -54,6 +54,8 @@ export class EdgeDock {
   private editorFocused = false
   /** 是否正在拖动调整宽度：拖动期间不收起，避免面板在手里消失 */
   private resizing = false
+  /** 是否隐藏到托盘：隐藏期间窗口整体不可见，鼠标贴边也不再唤出 */
+  private hidden = false
   private pollTimer: NodeJS.Timeout | null = null
   private collapseTimer: NodeJS.Timeout | null = null
   private frameTimer: NodeJS.Timeout | null = null
@@ -69,6 +71,59 @@ export class EdgeDock {
 
   getPhase(): DockPhase {
     return this.phase
+  }
+
+  isHidden(): boolean {
+    return this.hidden
+  }
+
+  /** 从托盘/菜单主动唤出面板；若处于隐藏态则先恢复 */
+  showPanel(reason = 'external'): void {
+    if (this.disposed) {
+      return
+    }
+    if (this.hidden) {
+      this.setHidden(false)
+      return
+    }
+    if (this.phase === 'expanded' || this.phase === 'expanding') {
+      return
+    }
+    this.expand(reason)
+  }
+
+  /**
+   * 隐藏到托盘 / 从托盘恢复。
+   * 隐藏与"收起"是两件事：收起仍留有 4px 触发条（鼠标一碰就回），
+   * 隐藏则把窗口整个藏起来，鼠标贴边也不会唤出，只能从托盘恢复。
+   */
+  setHidden(hidden: boolean): void {
+    if (this.disposed || this.hidden === hidden) {
+      return
+    }
+    this.hidden = hidden
+    this.stopAnimation()
+    this.clearCollapseTimer()
+
+    if (hidden) {
+      this.phase = 'collapsed'
+      this.x = this.geometry.collapsedX
+      this.applyBounds(true)
+      this.win.hide()
+      log('hidden-changed', { hidden, phase: this.phase })
+      this.hooks.onPhaseChange(this.phase)
+      return
+    }
+
+    this.geometry = this.computeGeometry()
+    this.phase = 'collapsed'
+    this.x = this.geometry.collapsedX
+    this.applyBounds(true)
+    this.win.showInactive()
+    log('hidden-changed', { hidden, phase: this.phase })
+    this.hooks.onPhaseChange(this.phase)
+    // 从托盘恢复后直接滑出，用户能立刻确认"它回来了"，随后照常按延迟收起
+    this.expand('tray-show')
   }
 
   /** 定位到初始位置、显示窗口并开始监听鼠标 */
@@ -221,6 +276,10 @@ export class EdgeDock {
 
   private tick(): void {
     if (this.disposed || this.win.isDestroyed()) {
+      return
+    }
+    // 隐藏到托盘期间不做任何鼠标响应，否则"隐藏"会被贴边动作立刻破坏
+    if (this.hidden) {
       return
     }
     const point = screen.getCursorScreenPoint()

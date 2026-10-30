@@ -15,6 +15,7 @@ import {
   expandByHover,
   launchApp,
   ps,
+  quitApp,
   resetArtifacts,
   runCleanup,
   waitChildExit,
@@ -250,7 +251,7 @@ async function main() {
   await page.insertText('退出前最后一句，不等待防抖立即关闭应用。')
   const expectedAfterQuit = await editorValue(page)
   const quitFrom = readLog(logFile).length
-  await page.evaluate(`document.getElementById('panel-close').click()`)
+  quitApp(page)
   const exited = await waitChildExit(app, 8000)
   record('点击关闭按钮退出应用', exited)
   const quitRecords = readLog(logFile).slice(quitFrom)
@@ -275,7 +276,7 @@ async function main() {
   await waitFor(page2, `document.querySelector('.confirm') !== null`, 2000, '清空确认条')
   await page2.evaluate(`document.getElementById('clear-confirm').click()`)
   await waitFor(page2, `document.querySelector('#save-status')?.textContent === '已保存'`, 4000, '收尾清空')
-  await page2.evaluate(`document.getElementById('panel-close').click()`)
+  quitApp(page2)
   await waitChildExit(app, 8000)
   page2.close()
 

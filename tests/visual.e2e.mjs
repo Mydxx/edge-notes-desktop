@@ -13,6 +13,7 @@ import {
   expandByHover,
   launchApp,
   ps,
+  quitApp,
   resetArtifacts,
   runCleanup,
   waitChildExit,
@@ -179,7 +180,7 @@ async function main() {
 
     // 收尾：清空内容并退出
     await page.evaluate('window.edgeNotes.saveNoteNow("")')
-    await page.evaluate(`document.getElementById('panel-close').click()`)
+    quitApp(page)
     await waitChildExit(app, 8000)
     page.close()
   } catch (error) {

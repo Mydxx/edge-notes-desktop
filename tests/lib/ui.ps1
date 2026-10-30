@@ -1,5 +1,5 @@
 param(
-  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'kill-renderer', 'clipboard-save', 'clipboard-set', 'clipboard-restore')][string]$Command,
+  [Parameter(Mandatory = $true)][ValidateSet('metrics', 'move', 'click', 'drag', 'shot', 'hover', 'jitter', 'strip', 'probe', 'dialog-open', 'dialog-focus', 'dialog-close', 'panel-topmost', 'panel-physical', 'zorder-compare', 'count-instances', 'close-window', 'kill-renderer', 'clipboard-save', 'clipboard-set', 'clipboard-restore')][string]$Command,
   [string]$OutDir = '',
   [int]$X = -1,
   [int]$Y = -1,
@@ -36,6 +36,7 @@ public static class EdgeNative {
   [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
   [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left; public int Top; public int Right; public int Bottom; }
   [DllImport("dwmapi.dll")] public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attr, out RECT rect, int size);
+  [DllImport("user32.dll")] public static extern bool PostMessage(IntPtr hWnd, uint msg, IntPtr wParam, IntPtr lParam);
   [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
   public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
   // EnumWindows 按 Z 序从上到下枚举，索引越小越靠上
@@ -284,6 +285,31 @@ switch ($Command) {
       $exStyle = [EdgeNative]::GetWindowLong($hwnd, -20)
       "PANEL-TOPMOST hwnd=$hwnd topmost=$([bool]($exStyle -band 0x8))"
     }
+  }
+  'close-window' {
+    # Post WM_CLOSE to the panel window: same code path as Alt+F4 / system close,
+    # without stealing focus from whatever the user is doing.
+    if ($PanelPid -gt 0) {
+      $proc = Get-Process -Id $PanelPid -ErrorAction SilentlyContinue
+    } else {
+      $proc = Get-Process -Name electron -ErrorAction SilentlyContinue |
+        Where-Object { $_.MainWindowTitle -eq 'Edge Notes' } |
+        Select-Object -First 1
+    }
+    if (-not $proc) { throw 'panel process not found' }
+    $proc.Refresh()
+    $hwnd = $proc.MainWindowHandle
+    if ($hwnd -eq [IntPtr]::Zero) { throw 'panel window handle not available' }
+    $ok = [EdgeNative]::PostMessage($hwnd, 0x0010, [IntPtr]::Zero, [IntPtr]::Zero)
+    "CLOSE-SENT hwnd=$hwnd ok=$ok"
+  }
+  'count-instances' {
+    # Count electron processes whose command line mentions the given user-data dir.
+    if (-not $TextFile) { throw 'count-instances requires -TextFile' }
+    $n = (Get-CimInstance Win32_Process -Filter "Name='electron.exe'" |
+      Where-Object { $_.CommandLine -like ("*" + $TextFile + "*") } |
+      Measure-Object).Count
+    "INSTANCES $n"
   }
   'kill-renderer' {
     # Kill the renderer child process to verify the main process recovery path.

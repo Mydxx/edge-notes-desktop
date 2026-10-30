@@ -140,6 +140,14 @@ export async function waitCollapsed(page, parkX = 200, parkY = 300, attempts = 4
   return page.evaluate('window.edgeNotes.getState()')
 }
 
+/**
+ * 触发退出但不等回复：退出过程中 CDP 会断开，等待返回只会悬挂。
+ * 进程是否真的结束由后续 waitChildExit 判定，那才是证据。
+ */
+export function quitApp(page) {
+  void page.send('Runtime.evaluate', { expression: 'window.edgeNotes.quit()' }).catch(() => undefined)
+}
+
 export function runCleanup() {
   spawnSync('powershell', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', path.join(root, 'tests', 'lib', 'cleanup.ps1')], {
     encoding: 'utf8'

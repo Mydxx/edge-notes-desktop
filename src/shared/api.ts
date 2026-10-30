@@ -18,11 +18,15 @@ export interface EdgeNotesSettings {
   pinnedOpen: boolean
   /** 鼠标离开后多久自动收起 */
   collapseDelay: CollapseDelay
+  /** 登录 Windows 后自动启动（默认关闭） */
+  launchAtLogin: boolean
 }
 
 export interface EdgeNotesRuntime {
   phase: DockPhase
   expanded: boolean
+  /** 是否被隐藏到托盘（隐藏后贴屏幕边缘不会再唤出，只能从托盘恢复） */
+  hidden: boolean
   triggerWidth: number
   collapseDelayMs: number
 }
@@ -30,6 +34,16 @@ export interface EdgeNotesRuntime {
 export interface EdgeNotesState {
   settings: EdgeNotesSettings
   runtime: EdgeNotesRuntime
+}
+
+/** 开机启动的真实状态：enabled 以系统回读为准，不是我们"以为"的值 */
+export interface LoginItemState {
+  /** 当前构建是否支持（由 Electron 平台实现决定） */
+  supported: boolean
+  /** 系统里实际是否已注册 */
+  enabled: boolean
+  /** 需要向用户解释的附加信息（例如开发模式下注册的是 Electron 本体） */
+  message: string | null
 }
 
 /** 保存状态：idle 表示还没有任何内容被写入过 */
@@ -56,8 +70,12 @@ export const IPC_CHANNELS = {
   setWidth: 'edge-notes:set-width',
   setCollapseDelay: 'edge-notes:set-collapse-delay',
   setResizing: 'edge-notes:set-resizing',
+  setHidden: 'edge-notes:set-hidden',
+  getLoginItem: 'edge-notes:get-login-item',
+  setLaunchAtLogin: 'edge-notes:set-launch-at-login',
   quit: 'edge-notes:quit',
   stateChanged: 'edge-notes:state-changed',
+  openSettings: 'edge-notes:open-settings',
   noteGet: 'edge-notes:note-get',
   noteUpdate: 'edge-notes:note-update',
   noteSaveNow: 'edge-notes:note-save-now',
@@ -75,6 +93,10 @@ export interface EdgeNotesApi {
   setCollapseDelay(delay: CollapseDelay): Promise<EdgeNotesState>
   /** 拖动调整宽度期间调用，避免鼠标暂时离开面板就被收起 */
   setResizing(value: boolean): void
+  /** 隐藏到托盘 / 从托盘恢复 */
+  setHidden(hidden: boolean): Promise<EdgeNotesState>
+  getLoginItemState(): Promise<LoginItemState>
+  setLaunchAtLogin(enabled: boolean): Promise<EdgeNotesState>
   quit(): Promise<void>
 
   getNote(): Promise<NoteSnapshot>
@@ -89,4 +111,6 @@ export interface EdgeNotesApi {
 
   onStateChanged(listener: (state: EdgeNotesState) => void): () => void
   onNoteStatus(listener: (status: NoteStatus) => void): () => void
+  /** 从托盘「设置…」打开设置面板 */
+  onOpenSettings(listener: () => void): () => void
 }

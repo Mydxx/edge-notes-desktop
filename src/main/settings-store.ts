@@ -14,7 +14,8 @@ export const DEFAULT_SETTINGS: EdgeNotesSettings = {
   width: PANEL_WIDTH_DEFAULT,
   alwaysOnTop: true,
   pinnedOpen: false,
-  collapseDelay: COLLAPSE_DELAY_DEFAULT
+  collapseDelay: COLLAPSE_DELAY_DEFAULT,
+  launchAtLogin: false
 }
 
 /**
@@ -105,6 +106,7 @@ export function sanitizeSettings(input: Record<string, unknown>): EdgeNotesSetti
     width,
     collapseDelay,
     alwaysOnTop: input.alwaysOnTop !== false,
-    pinnedOpen: input.pinnedOpen === true
+    pinnedOpen: input.pinnedOpen === true,
+    launchAtLogin: input.launchAtLogin === true
   }
 }

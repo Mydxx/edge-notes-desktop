@@ -14,6 +14,7 @@ import {
   expandByHover,
   launchApp,
   ps,
+  quitApp,
   resetArtifacts,
   root,
   runCleanup,
@@ -501,7 +502,7 @@ async function main() {
   await delay(500)
 
   const quitFrom = readLog(logFile).length
-  await page.evaluate(`document.getElementById('panel-close').click()`)
+  quitApp(page)
   const exited = await waitChildExit(app, 8000)
   record('点击关闭按钮可正常退出应用', exited)
   await delay(300)
@@ -588,7 +589,7 @@ async function main() {
   await delay(400)
   ps('shot', '-OutDir', shotsDir, '-Name', '09-final')
   await delay(200)
-  await page2.evaluate(`document.getElementById('panel-close').click()`)
+  quitApp(page2)
   await waitChildExit(app, 8000)
   page2.close()
 
@@ -602,7 +603,7 @@ async function main() {
   }
   const quitOnce = async (child) => {
     const session = await connectPage(cdpPort)
-    await session.evaluate(`document.getElementById('panel-close').click()`)
+    quitApp(session)
     await waitChildExit(child, 8000)
     session.close()
   }
@@ -661,7 +662,7 @@ async function main() {
   record('崩溃后界面自动恢复可用', beforeCrash === 'Edge Notes' && afterCrash === 'Edge Notes' && apiBack === true, `${beforeCrash} → ${afterCrash}`)
   const recoveredState = await recoveredPage.evaluate('window.edgeNotes.getNote()')
   record('崩溃恢复后笔记数据仍在', typeof recoveredState.content === 'string')
-  await recoveredPage.evaluate(`document.getElementById('panel-close').click()`)
+  quitApp(recoveredPage)
   await waitChildExit(crashApp, 8000)
   crashPage.close()
   recoveredPage.close()
