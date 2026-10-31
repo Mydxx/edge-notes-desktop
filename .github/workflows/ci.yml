@@ -1,0 +1,30 @@
+name: CI
+
+# 只跑能在无人值守环境里跑的部分：类型检查 + 构建。
+# e2e（tests/*.e2e.mjs）依赖 Windows 真实桌面、真实鼠标与真实剪贴板，
+# GitHub 托管 runner 上跑不了，只能在本机手动执行。
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build

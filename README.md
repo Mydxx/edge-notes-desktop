@@ -16,6 +16,18 @@
 - **拖标题栏即可换边**：按住标题栏左右拖超过 24px 松手，面板停靠到拖向的那一侧，
   拖回起点再松手则不换边；内缘把手仍然只负责拖宽度。
 
+## 界面
+
+<p align="center">
+  <img src="docs/images/panel.png" width="280" alt="贴边滑出的面板：左侧笔记列表、右侧编辑区、底部保存状态" />
+</p>
+
+<p align="center">
+  <img src="docs/images/drag-side.png" width="440" alt="拖标题栏换边：目标侧出现高亮，并提示「松开停靠到左侧」" />
+</p>
+
+面板纵向铺满工作区、不压任务栏；收起时窗口整体移出屏幕，只留 4px 触发条。
+
 ## 快速开始
 
 ```powershell
@@ -24,8 +36,8 @@ npm run dev        # 编译主进程 + 起 Vite(5199) + 拉起 Electron
 npm run build      # tsc 编译主进程/preload + vite 构建渲染层
 npm start          # 构建后以产物方式启动（file:// 加载）
 npm run typecheck  # 两套 tsconfig 类型检查
-npm run test:e2e   # 构建 + 窗口 79 + 笔记 33 + 桌面集成 25 项断言
-npm run test:visual # 多宽度/多状态截图 + 布局溢出度量（14 项断言）
+npm run test:e2e   # 构建 + 窗口 / 笔记 / 桌面集成三套真实交互断言
+npm run test:visual # 多宽度/多状态截图 + 布局溢出度量
 npm run gen:icon   # 重新生成 assets/tray.png 与 @2x（图标脚本在仓库内）
 ```
 
@@ -162,9 +174,25 @@ E2E 会**真实移动鼠标、真实点击、真实读写剪贴板**，因此：
 | 04 面板设置与窗口交互（左右切换 / 宽度 280–600 / 收起延迟三档） | ✅ |
 | 05 UI 与视觉精修（设计 Token、头栏收敛、底栏状态、焦点环） | ✅（视觉 14 项断言 + 9 组截图） |
 | 06 桌面集成（托盘、隐藏/退出、开机启动） | ✅（桌面集成 32 项断言） |
-| 06·5 体验修复（浅色主题、字号档位、字体栈、数据目录外置） | ✅（共 163 项断言） |
-| 06·6 Markdown 预览 + 图片粘贴（方案 B） | ✅（共 171 项断言） |
-| 06·7 多笔记管理 + 工作状态记忆 | ✅（共 213 项断言） |
-| 07 打包与日常使用测试 | 未开始 |
+| 06·5 体验修复（浅色主题、字号档位、字体栈、数据目录外置） | ✅ |
+| 06·6 Markdown 预览 + 图片粘贴（方案 B） | ✅ |
+| 06·7 多笔记管理 + 工作状态记忆 | ✅ |
+| 07 打包与日常使用测试（NSIS 安装包 + 便携版，安装/卸载冒烟） | ✅（v1.0.0） |
+| 08 体验修复（隐藏唤出白板、任务栏常驻化、拖标题栏换边） | ✅（v1.1.0） |
+
+逐轮验收项与断言明细见 [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md)。
 
 界面样式统一由 `src/renderer/styles.css` 顶部的设计 Token 驱动（颜色/间距/圆角/字号/结构尺寸），组件内不写死数值。
+
+## 环境要求
+
+- Windows 10/11（窗口贴边、托盘、开机启动都依赖 Win32 接口，未做跨平台适配）
+- Node.js ≥ 20（`engines` 里已声明；开发/构建用，运行打包好的 exe 不需要 Node）
+- 打包与安装包构建需要能访问 GitHub（Electron 二进制从这里下载），国内环境请先配代理
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
+
+打包产物里包含的第三方组件保留各自的协议：Electron（MIT，附 `LICENSES.chromium.html`）、
+React / marked（MIT）、DOMPurify（`MPL-2.0 OR Apache-2.0`，未修改其源码）。

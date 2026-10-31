@@ -2,7 +2,7 @@
 # 产物统一落在 D:\AI-tools\AI开发目录\outputs\edge-notes，不塞进项目目录。
 appId: com.edgenotes.desktop
 productName: Edge Notes Desktop
-copyright: Copyright © 2026 Edge Notes
+copyright: Copyright © 2026 Mydxx (Edge Notes)
 
 asar: true
 # 没有需要编译的原生模块，跳过 rebuild 可以省掉一次 node-gyp 折腾
@@ -18,6 +18,8 @@ files:
   - dist/**/*
   - dist-electron/**/*
   - package.json
+  # 开源协议随包分发，装完在安装目录/asar 里能看到（MIT 要求保留版权声明）
+  - LICENSE
   # 源码、测试、截图、临时探针一律不进包
   - '!**/*.map'
   - '!**/*.ts'
@@ -46,6 +48,8 @@ nsis:
   perMachine: false
   allowElevation: true
   allowToChangeInstallationDirectory: true
+  # 安装时展示 MIT 协议页
+  license: LICENSE
   createDesktopShortcut: true
   createStartMenuShortcut: true
   shortcutName: Edge Notes
