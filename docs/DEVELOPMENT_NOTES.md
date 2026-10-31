@@ -169,11 +169,108 @@ win.setAlwaysOnTop(false)  // HWND_NOTOPMOST：落到"普通窗口层的最上�
 ### 4.4 隐藏 ≠ 收起
 
 - **收起**：窗口还在，只露 4px，鼠标一碰就回；
-- **隐藏**：整个窗口 `hide()`，任务栏/托盘还在。
+- **隐藏**：整个窗口 `hide()`，只剩托盘图标（任务栏里没有按钮，见 4.5）。
 
 两者混在一起做，会导致"隐藏后鼠标贴边又把面板叫出来"的矛盾行为。
 所以隐藏态额外加了一个**门闩**（`hoverWakeArmed`）：
 隐藏那一刻指针若正好停在边缘，必须先移开再贴回来才算"主动召回"，否则会出现"刚藏起来就弹回来"。
+
+### 4.5 任务栏里不该有它
+
+常驻托盘的工具，任务栏按钮纯属噪音：收起时只剩 4px，用户却在任务栏看到一个 "Edge Notes"，
+第一反应是"是不是有个窗口没关掉"。
+
+两处改动：
+
+- `new BrowserWindow({ skipTaskbar: true })`：窗口可见时也不占任务栏位置。Windows 上走的是
+  `ITaskbarList::DeleteTab`，只删任务栏标签，Alt+Tab 仍能切到它，不影响"面板被呼叫"的路径。
+- `minimize` 事件兜底：`minimizable: false` 只去掉最小化按钮，挡不住 Win+D /"显示桌面"
+  这类直接 `ShowWindow(SW_MINIMIZE)` 的外部动作。最小化一发生就 `restore()` 再
+  `setHidden(true)`，转成"隐藏到托盘"，让窗口对外只存在两种状态：贴在屏幕边缘，或完全藏起来。
+
+`restore()` 不能省：对一个已经处于最小化状态的窗口直接 `hide()`，之后再 `showInactive()`
+未必能把它拿回来（会出现"托盘点了没反应"）。
+
+验证不用肉眼（三个可测信号）：
+
+| 断言 | 证据来源 |
+|---|---|
+| 窗口可见时任务栏没有它 | UI Automation 枚举 `Shell_TrayWnd` 子孙按钮，清单里搜不到 "Edge Notes" |
+| 最小化会自动变成隐藏 | `ShowWindow(hwnd, SW_MINIMIZE)` 后 `IsWindowVisible` = False，且 `IsIconic` = False（说明是 hide 而不是留在最小化态） |
+| 隐藏后还能召回 | `SetCursorPos` 真实移动光标贴屏边 → `IsWindowVisible` 回到 True |
+
+### 4.6 "隐藏后唤出变白板"到底是怎么回事
+
+现象：点"隐藏到托盘"→ 再从屏幕边缘唤出，面板回来了，但里面只有窗口底色，
+工具栏、笔记列表、输入框全都不见。看起来像应用崩了，实际上进程、DOM、React 全都活着。
+
+定位过程和结论（这条比结论本身更有用）：
+
+1. 先证明"不是渲染层的问题"：CDP `Runtime.evaluate` 读 `document.body.innerHTML`（4501 字符）、
+   `.panel` 的 `getBoundingClientRect`（350×1020）、`opacity/visibility` 都正常；
+   `Page.captureScreenshot` 抓出来的图**完整有界面**。
+   → DOM 与渲染管线都好，问题在"窗口合成/呈现"这一层。
+2. 再录屏对比：`CopyFromScreen` 抓同一块区域，只有底色。
+   两边一对照，结论就很干净：**渲染层画了，窗口没把它贴到屏幕上**。
+3. 根因：面板 96% 的时间停在屏幕外（收起只露 4px），Chromium 的遮挡判定会把这种窗口
+   标成 occluded 直接停止出帧。从 `hide()` 恢复时 `showInactive()` 让窗口重新可见，
+   但合成层没有重新提交，于是只有 `backgroundColor` 被画出来。
+
+三层加固（缺一层都可能偶发）：
+
+| 层 | 做法 | 为什么 |
+|---|---|---|
+| 关掉遮挡降频 | `app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')` + `disable-renderer-backgrounding` | 从源头上不让 Chromium 因为"窗口在屏幕外"而停止出帧 |
+| 显示后强制重绘 | `win.showInactive(); win.webContents.invalidate()` 收进一个 `showWithoutFocus()` | 直接把这个已知的"surface 没重挂"状态刷掉 |
+| 落位后再刷一次 | `expand()` 动画结束回调里再 `invalidate()` | 滑入全靠 `setBounds` 推帧，整段动画可能一帧都没提交 |
+
+验证方式（可复现、可量化）：用 preload 暴露的 `window.edgeNotes.setHidden()` 走**和按钮完全
+同一条 IPC 路径**做"隐藏→贴边唤出"，每轮用 `CopyFromScreen` 抓 360×260，统计唯一颜色数：
+空白面板只有底色（<30 色），正常界面稳定在 ~294 色。隐藏时长覆盖 0.7s / 2s / 5s / 20s，
+8 轮 0 次空白。
+
+踩过的坑：早期几轮测试"怎么都唤不出来"，日志里只有 `hidden-changed` 没有 `hidden-wake`。
+原因是**用户正在用鼠标**，`SetCursorPos` 设好的位置立刻被真实鼠标覆盖，面板自然不展开。
+教训：涉及真实鼠标的自动化，必须每轮校验"光标是否真的到了目标位置"，否则测出来的
+"No wake" 是假故障。
+
+### 4.7 拖标题栏换边（往左拖=停靠左侧）
+
+需求："用鼠标往左拖然后松手就跳到左侧，往右同理。"
+
+手势放在**标题栏**，不是整个面板：
+
+- 面板里要选文字、要点按钮，大面积接管 pointer 事件会把这些都弄坏；
+- 内缘已经是"拖宽"手势的地盘，再叠一个手势必然互相打架；
+- 标题栏本来就没有可编辑内容，语义上就是"拖动窗口"的地方。
+
+实现要点：
+
+1. `pointerdown` 记下起点与当前 `side`，并 `setPointerCapture`（拖出面板也不会丢事件）；
+   从按钮上按下的拖动直接放行给按钮（`target.closest('button')`），否则点设置会把面板甩走。
+2. `pointermove` 算 `dx/dy`：`|dx| >= 24` 且 `|dx| >= |dy|` 才算"要换边"，
+   方向就是目标侧（`dx < 0` → 左）。**不回中就不换**，手抖不会让面板翻面。
+3. `pointerup` 才真正 `setSide(target)`：拖动过程中面板纹丝不动，松手才"跳"过去——
+   这样中途反悔只要把指针拖回起点即可，不会误操作。
+4. 拖动期间复用 `setResizing(true)`（主进程里就是"别自动收起"的开关），
+   否则拖到面板外面超过 1.2s，面板会自己缩回去把拖拽打断。
+
+提示：`dropSide` 只在"目标侧 ≠ 当前侧"时才会渲染出 `dropHint`——
+目标侧贴一条 4px 强调色竖线，标题下方给一句"松开停靠到左侧/右侧"，
+避免用户盲拖。
+
+验证（两种输入通道都过一遍）：
+
+| 断言 | 方式 |
+|---|---|
+| 往右拖松手 → 停靠右侧 / 往左拖松手 → 停靠左侧 | 真实鼠标 `mouse_event` 按住拖动 + 读 `edge-notes-settings.json` 的 `side`，两向各一次 |
+| 拖动中真的出现提示、拖回起点提示消失 | CDP `Runtime.evaluate` 读 `.dropHint` 的 `className/textContent/getBoundingClientRect` |
+| 标题栏按钮没被手势吃掉 | CDP `Input.dispatchMouseEvent` 点中 `#toggle-always-on-top` → 设置里 `alwaysOnTop` 翻转；再用真实鼠标复测一次 |
+| 换边不影响宽度 | 整个过程 `width` 始终是 350 |
+
+测试期间的另一个坑：PowerShell 里的 `SetCursorPos` 用的是**逻辑（DIP）像素**（屏幕只有 0~1706），
+我一开始按物理像素写坐标（还乘了 1.5），点击直接飞到屏幕最右边，表现成"往左拖没反应"。
+现在坐标一律用逻辑像素写，和 Electron 的 `screenX` 同一空间。
 
 ---
 

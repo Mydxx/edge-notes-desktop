@@ -36,6 +36,15 @@ import type { TrayHandlers } from './tray'
 // 明确应用名：userData 目录与单实例锁都基于它，避免与其它 Electron 应用互相覆盖数据/互相踢掉
 app.setName('Edge Notes Desktop')
 
+/**
+ * 面板 96% 的时间停在屏幕外（收起时只露 4px），Chromium 会把这种窗口判为"被遮挡"，
+ * 直接停止出帧；从隐藏态唤出时窗口已经可见了，合成层却没有重新提交，
+ * 屏幕上就只剩窗口底色，界面全空——这就是"隐藏后唤出变白板"的根因。
+ * 关掉 Chromium 的遮挡降频/渲染暂停，保证窗口一直在出帧。
+ */
+app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+app.commandLine.appendSwitch('disable-renderer-backgrounding')
+
 // 必须在 app ready 之前决定数据目录（用户可能已经把它挪到别的盘）
 resolveUserDataDir()
 
@@ -190,7 +199,10 @@ function createWindow(): BrowserWindow {
     minimizable: false,
     maximizable: false,
     fullscreenable: false,
-    skipTaskbar: false,
+    // 常驻托盘工具的定位：任务栏上不出现 Edge Notes 按钮。
+    // 面板收起时只剩 4px、隐藏时整个不可见，任务栏里留一个按钮只会让用户以为
+    // "还有个窗口没关掉"。唤出统一走托盘图标 / 全局快捷键 / 鼠标贴边。
+    skipTaskbar: true,
     hasShadow: false,
     alwaysOnTop: settings?.alwaysOnTop ?? true,
     webPreferences: {
@@ -217,6 +229,24 @@ function createWindow(): BrowserWindow {
     }
     event.preventDefault()
     log('close-intercepted', {})
+    dock?.setHidden(true)
+    broadcast()
+  })
+
+  /**
+   * Win+D / "显示桌面" / 系统缩略图之类的外部动作仍可能把它最小化。
+   * 最小化的面板既看不见又容易被误认为"程序坏了"，这里直接转成隐藏到托盘，
+   * 让窗口对外只有两种状态：贴在屏幕边缘（可见）或完全藏起来（托盘可召回）。
+   */
+  win.on('minimize', () => {
+    if (quitting) {
+      return
+    }
+    log('minimize-to-tray', {})
+    // 先还原再 hide：直接 hide 一个最小化窗口，之后 showInactive() 未必能把它拿回来
+    if (win.isMinimized()) {
+      win.restore()
+    }
     dock?.setHidden(true)
     broadcast()
   })

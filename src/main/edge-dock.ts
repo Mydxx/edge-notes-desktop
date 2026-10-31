@@ -141,7 +141,7 @@ export class EdgeDock {
     this.phase = 'collapsed'
     this.x = this.geometry.collapsedX
     this.applyBounds(true)
-    this.win.showInactive()
+    this.showWithoutFocus()
     log('hidden-changed', { hidden, phase: this.phase })
     this.hooks.onPhaseChange(this.phase)
     // 从托盘/快捷键恢复后直接滑出，用户能立刻确认"它回来了"，随后照常按延迟收起
@@ -159,7 +159,7 @@ export class EdgeDock {
     this.x = this.targetXFor(this.phase)
     this.applyBounds(true)
     this.win.setAlwaysOnTop(this.settings.alwaysOnTop)
-    this.win.showInactive()
+    this.showWithoutFocus()
 
     screen.on('display-metrics-changed', this.handleDisplayChange)
     screen.on('display-added', this.handleDisplayChange)
@@ -435,6 +435,11 @@ export class EdgeDock {
 
     this.animateTo(this.geometry.expandedX, EXPAND_ANIMATION_MS, () => {
       this.phase = 'expanded'
+      // 位移动画全靠 setBounds 推帧，窗口从"屏外/被遮挡"状态滑进来时，
+      // 合成层可能整段动画都没提交过一帧（表现为滑出一块空白）。落位后强制重绘一次。
+      if (!this.win.isDestroyed()) {
+        this.win.webContents.invalidate()
+      }
       log('expanded', { reason, x: this.x, bounds: this.win.getBounds() })
       this.hooks.onPhaseChange(this.phase)
       // 快速划过触发条的情况：展开完成后光标已不在面板上，直接进入延迟收起
@@ -507,6 +512,22 @@ export class EdgeDock {
   }
 
   /**
+   * 显示窗口，但不抢键盘焦点。
+   *
+   * 必须跟一次 `invalidate()`：Windows 上 `hide()` 会释放窗口的合成表面，
+   * `showInactive()` 回来时偶尔不会重新提交内容层——屏幕上是"只剩底色、
+   * 里面什么都没有"的空面板，而 DOM 完好、CDP 截图也正常，看起来像应用挂了。
+   * 主动请求一次全量重绘可以把这个状态强制刷掉（隐藏→唤出后偶发白板的根因）。
+   */
+  private showWithoutFocus(): void {
+    if (this.disposed || this.win.isDestroyed()) {
+      return
+    }
+    this.win.showInactive()
+    this.win.webContents.invalidate()
+  }
+
+  /**
    * 把面板抬到其它窗口之上，但不抢焦点（moveTop 等价于 SetWindowPos 的 HWND_TOP，
    * 不调用 SetForegroundWindow）。这样用户正在浏览器里打字时，鼠标贴边也能看见面板。
    */
@@ -515,7 +536,7 @@ export class EdgeDock {
       return
     }
     if (!this.win.isVisible()) {
-      this.win.showInactive()
+      this.showWithoutFocus()
     }
     if (this.settings.alwaysOnTop) {
       // 已经是置顶窗口，moveTop 只是在本层里排到最前

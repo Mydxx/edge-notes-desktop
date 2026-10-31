@@ -98,6 +98,9 @@ function IconMinimize() {
   )
 }
 
+/** 横向拖拽超过这个距离才算“要换边”，避免手一抖面板就翻面 */
+const SIDE_DRAG_THRESHOLD_PX = 24
+
 export default function App() {
   const [state, setState] = useState<EdgeNotesState | null>(null)
   const [status, setStatus] = useState<NoteStatus>(EMPTY_STATUS)
@@ -126,6 +129,16 @@ export default function App() {
   /** 拖动调宽时的锚点（面板贴边那一侧的屏幕坐标） */
   const dragRef = useRef<{ anchor: number; side: 'left' | 'right' } | null>(null)
   const lastWidthRef = useRef(0)
+  /** 标题栏左右拖动换边的过程状态（target 是松手后要停靠的那一侧） */
+  const sideDragRef = useRef<{
+    startX: number
+    startY: number
+    side: 'left' | 'right'
+    target: 'left' | 'right' | null
+  } | null>(null)
+  /** 拖动中悬停的目标侧，只用于画提示，不参与业务判断 */
+  const [dropSide, setDropSide] = useState<'left' | 'right' | null>(null)
+  const [sideDragging, setSideDragging] = useState(false)
 
   // 窗口设置
   useEffect(() => {
@@ -385,6 +398,92 @@ export default function App() {
       setBusy(false)
     }
   }, [])
+
+  /**
+   * 标题栏左右拖 = 换边：往左拖松手停靠左侧，往右拖松手停靠右侧。
+   *
+   * 为什么放在标题栏而不是整个面板：面板里要选中文字、要点按钮，
+   * 大面积接管 pointer 事件会把这些都弄坏；内缘又是"拖宽"手势的地盘。
+   * 标题栏既没有可编辑内容，又天然是"拖动窗口"的地方，语义最正。
+   */
+  const handleSideDragStart = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (event.button !== 0 || !state) {
+        return
+      }
+      // 从按钮上按下的拖动留给按钮自己（避免点设置时顺带把面板甩到另一边）
+      if ((event.target as HTMLElement).closest('button')) {
+        return
+      }
+      event.preventDefault()
+      event.currentTarget.setPointerCapture(event.pointerId)
+      sideDragRef.current = {
+        startX: event.screenX,
+        startY: event.screenY,
+        side: state.settings.side,
+        target: null
+      }
+      setSideDragging(true)
+      // 拖动期间禁止"鼠标离开面板就自动收起"，否则拖到一半面板自己缩回去了
+      window.edgeNotes.setResizing(true)
+    },
+    [state]
+  )
+
+  const handleSideDragMove = useCallback((event: ReactPointerEvent<HTMLElement>) => {
+    const drag = sideDragRef.current
+    if (!drag) {
+      return
+    }
+    const dx = event.screenX - drag.startX
+    const dy = event.screenY - drag.startY
+    // 只有"明显横向"的拖动才认，斜着往下拖当手滑处理
+    const horizontal = Math.abs(dx) >= SIDE_DRAG_THRESHOLD_PX && Math.abs(dx) >= Math.abs(dy)
+    const next = horizontal ? (dx < 0 ? 'left' : 'right') : null
+    drag.target = next
+    setDropSide(next && next !== drag.side ? next : null)
+  }, [])
+
+  const finishSideDrag = useCallback(
+    (commit: boolean) => {
+      const drag = sideDragRef.current
+      sideDragRef.current = null
+      setDropSide(null)
+      setSideDragging(false)
+      window.edgeNotes.setResizing(false)
+      if (!commit || !drag || !drag.target || drag.target === drag.side) {
+        return
+      }
+      void applySettings(() => window.edgeNotes.setSide(drag.target!))
+    },
+    [applySettings]
+  )
+
+  const handleSideDragEnd = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (!sideDragRef.current) {
+        return
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      finishSideDrag(true)
+    },
+    [finishSideDrag]
+  )
+
+  const handleSideDragCancel = useCallback(
+    (event: ReactPointerEvent<HTMLElement>) => {
+      if (!sideDragRef.current) {
+        return
+      }
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId)
+      }
+      finishSideDrag(false)
+    },
+    [finishSideDrag]
+  )
 
   const handleClear = useCallback(async () => {
     setConfirmingClear(false)
@@ -908,6 +1007,13 @@ export default function App() {
         onPointerCancel={handleResizeEnd}
       />
 
+      {/* 换边提示：拖到阈值后告诉用户"松手会停在哪一侧"，避免盲操作 */}
+      {dropSide ? (
+        <div className={`dropHint dropHint--${dropSide}`} aria-hidden="true">
+          <span className="dropHint__label">松开停靠到{dropSide === 'left' ? '左侧' : '右侧'}</span>
+        </div>
+      ) : null}
+
       <nav
         className={`notesNav${navCollapsed ? ' notesNav--collapsed' : ''}`}
         id="notes-nav"
@@ -1046,8 +1152,16 @@ export default function App() {
       </nav>
 
       <div className="pane">
-      <header className="bar">
-        <span className="bar__title">Edge Notes</span>
+      <header
+        className={`bar${sideDragging ? ' bar--dragging' : ''}`}
+        onPointerDown={handleSideDragStart}
+        onPointerMove={handleSideDragMove}
+        onPointerUp={handleSideDragEnd}
+        onPointerCancel={handleSideDragCancel}
+      >
+        <span className="bar__title" title="按住标题栏左右拖动，可把面板停靠到另一侧">
+          Edge Notes
+        </span>
         <span className="bar__spacer" />
         <button
           id="toggle-always-on-top"
